@@ -21,11 +21,11 @@ Add the crate to your dependencies:
 contiguous_mem = "0.1.0"
 ```
 
-Optionally disable the `std` feature to use in `no_std` environment:
+Optionally disable the `std` feature and enable `no_std` feature to use in `no_std` environment:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.1.0", default-features = false }
+contiguous_mem = { version = "0.1.0", default-features = false, features = ["no_std"] }
 ```
 
 ### Example usage
@@ -56,7 +56,7 @@ fn main() {
 
 ## Contributions
 
-Contribtions are welcome, feel free to create an issue or a pull request.
+Contributions are welcome, feel free to create an issue or a pull request.
 
 All contributions to the project are licensed under the zlib/MIT/Apache 2.0 license unless you explicitly state otherwise.
 
