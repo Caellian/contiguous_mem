@@ -1,0 +1,26 @@
+[package]
+name = "contiguous-mem"
+version = "0.1.0"
+edition = "2021"
+description = "A contiguous memory storage"
+authors = ["Tin Švagelj <tin.svagelj@live.com>"]
+license = "MIT OR Apache-2.0 OR Zlib"
+keywords = ["memory", "contiguous", "storage", "container", "nostd"]
+categories = [
+    "data-structures",
+    "memory-management",
+    "game-engines",
+    "game-development",
+    "no-std",
+]
+repository = "https://github.com/Caellian/contiguous_mem"
+
+[dependencies]
+portable-atomic = { version = "1", default-features = false }
+spin = { version = "0.9", optional = true }
+
+[features]
+default = ["std"]
+std = ["portable-atomic/std"]
+no_std = ["dep:spin"]
+debug = []
