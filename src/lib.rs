@@ -1,4 +1,5 @@
 #![cfg_attr(feature = "no_std", no_std)]
+#![cfg_attr(feature = "ptr_metadata", feature(ptr_metadata))]
 
 #[cfg(feature = "no_std")]
 extern crate alloc;
@@ -15,10 +16,12 @@ pub mod error;
 
 use core::{
     cell::{Cell, RefCell},
-    marker::PhantomData,
     mem::size_of,
-    ptr::{null_mut, write_unaligned},
+    ptr::{null_mut, write_unaligned, Pointee},
 };
+
+#[cfg(not(feature = "ptr_metadata"))]
+use core::marker::PhantomData;
 
 #[cfg(feature = "std")]
 mod std_imports {
@@ -464,7 +467,7 @@ pub trait ImplDetails {
     type AllocationTracker: Clone;
 
     /// The type representing the result of an allocation operation.
-    type AllocResult<T>;
+    type AllocResult<T: ?Sized>;
 
     /// The type representing the usage counter in [`crate::Ref`] type.
     type UseCounter: Clone;
@@ -534,7 +537,7 @@ pub struct ThreadSafeImpl;
 impl ImplDetails for ThreadSafeImpl {
     type Base = Arc<Mutex<*mut u8>>;
     type AllocationTracker = Arc<Mutex<AllocationTracker>>;
-    type AllocResult<T> = Ref<T, Self>;
+    type AllocResult<T: ?Sized> = CMRef<T, Self>;
     type UseCounter = Arc<AtomicUsize>;
 
     const USE_LOCKS: bool = true;
@@ -622,11 +625,14 @@ impl ImplDetails for ThreadSafeImpl {
         range: &ByteRange,
         tracker: &Self::AllocationTracker,
     ) -> Self::AllocResult<T> {
-        Ref {
+        CMRef {
             base: base.clone(),
             range: range.clone(),
             tracker: tracker.clone(),
             uses: Arc::new(AtomicUsize::new(1)),
+            #[cfg(feature = "ptr_metadata")]
+            metadata: (),
+            #[cfg(not(feature = "ptr_metadata"))]
             _phantom: PhantomData,
         }
     }
@@ -650,7 +656,7 @@ pub struct NotThreadSafeImpl;
 impl ImplDetails for NotThreadSafeImpl {
     type Base = Rc<Cell<*mut u8>>;
     type AllocationTracker = Rc<RefCell<AllocationTracker>>;
-    type AllocResult<T> = Ref<T, Self>;
+    type AllocResult<T: ?Sized> = CMRef<T, Self>;
     type UseCounter = Rc<Cell<usize>>;
 
     #[inline(always)]
@@ -723,11 +729,14 @@ impl ImplDetails for NotThreadSafeImpl {
         range: &ByteRange,
         tracker: &Self::AllocationTracker,
     ) -> Self::AllocResult<T> {
-        Ref {
+        CMRef {
             base: base.clone(),
             range: range.clone(),
             tracker: tracker.clone(),
             uses: Rc::new(Cell::new(1)),
+            #[cfg(feature = "ptr_metadata")]
+            metadata: (),
+            #[cfg(not(feature = "ptr_metadata"))]
             _phantom: PhantomData,
         }
     }
@@ -752,7 +761,7 @@ pub struct FixedSizeImpl;
 impl ImplDetails for FixedSizeImpl {
     type Base = *mut u8;
     type AllocationTracker = AllocationTracker;
-    type AllocResult<T> = *mut T;
+    type AllocResult<T: ?Sized> = *mut T;
     type UseCounter = ();
 
     const CAN_GROW: bool = false;
@@ -1036,15 +1045,40 @@ impl<S: ImplDetails> Drop for ContiguousMemory<S> {
 }
 
 /// A reference to `T` data stored in a [`ContiguousMemory`] structure.
-pub struct Ref<T, S: ImplDetails = NotThreadSafeImpl> {
+pub struct CMRef<T: ?Sized, S: ImplDetails = NotThreadSafeImpl> {
     base: S::Base,
     range: ByteRange,
     tracker: S::AllocationTracker,
     uses: S::UseCounter,
+    #[cfg(feature = "ptr_metadata")]
+    metadata: <T as Pointee>::Metadata,
+    #[cfg(not(feature = "ptr_metadata"))]
     _phantom: PhantomData<T>,
 }
+/// [`CMRef`] re-export to keep API compatibility with 0.1.*
+pub type Ref<T, S = NotThreadSafeImpl> = CMRef<T, S>;
 
-impl<T, S: ImplDetails> Ref<T, S> {
+#[cfg(feature = "ptr_metadata")]
+impl<T: Sized, S: ImplDetails> CMRef<T, S> {
+    pub unsafe fn as_dyn<Dyn: ?Sized>(
+        &self,
+        metadata: <Dyn as Pointee>::Metadata,
+    ) -> CMRef<Dyn, S> {
+        CMRef {
+            base: self.base.clone(),
+            range: self.range.clone(),
+            tracker: self.tracker.clone(),
+            uses: self.uses.clone(),
+            #[cfg(feature = "ptr_metadata")]
+            metadata: core::mem::transmute(metadata),
+            #[cfg(not(feature = "ptr_metadata"))]
+            _phantom: PhantomData,
+        }
+    }
+}
+
+#[cfg(not(feature = "ptr_metadata"))]
+impl<T: ?Sized, S: ImplDetails> CMRef<T, S> {
     /// Tries accessing referenced data at its current location.
     ///
     /// Returns a [`Poisoned`](ContiguousMemoryError::Poisoned) error if the Mutex
@@ -1057,20 +1091,38 @@ impl<T, S: ImplDetails> Ref<T, S> {
     }
 }
 
-impl<T, S: ImplDetails> Clone for Ref<T, S> {
+#[cfg(feature = "ptr_metadata")]
+impl<T: ?Sized, S: ImplDetails> CMRef<T, S> {
+    /// Tries accessing referenced data at its current location.
+    ///
+    /// Returns a [`Poisoned`](ContiguousMemoryError::Poisoned) error if the Mutex
+    /// holding the `base` address pointer has been poisoned.
+    pub fn get(&self) -> Result<&T, ContiguousMemoryError> {
+        unsafe {
+            let base = S::get_base(&self.base)?.offset(self.range.0 as isize);
+            let fat: *const T = core::ptr::from_raw_parts::<T>(base as *const (), self.metadata);
+            Ok(&*fat)
+        }
+    }
+}
+
+impl<T, S: ImplDetails> Clone for CMRef<T, S> {
     fn clone(&self) -> Self {
         S::bump_ref(&self.uses);
-        Ref {
+        CMRef {
             base: self.base.clone(),
             range: self.range.clone(),
             tracker: self.tracker.clone(),
             uses: self.uses.clone(),
+            #[cfg(feature = "ptr_metadata")]
+            metadata: self.metadata.clone(),
+            #[cfg(not(feature = "ptr_metadata"))]
             _phantom: PhantomData,
         }
     }
 }
 
-impl<T, S: ImplDetails> Drop for Ref<T, S> {
+impl<T: ?Sized, S: ImplDetails> Drop for CMRef<T, S> {
     fn drop(&mut self) {
         if S::drop_ref(&mut self.uses) {
             let _ = S::release_range(&mut self.tracker, self.range);
