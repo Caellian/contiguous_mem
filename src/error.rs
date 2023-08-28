@@ -38,7 +38,7 @@ pub enum ContiguousMemoryError {
 pub enum PoisonedMutex {
     /// Mutex containing the base memory offset was poisoned.
     BaseAddress,
-    /// [`AllocationTracker`] mutex was poisoned.
+    /// [`AllocationTracker`](crate::AllocationTracker) mutex was poisoned.
     AllocationTracker,
 }
 

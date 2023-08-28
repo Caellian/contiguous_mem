@@ -17,11 +17,14 @@ pub mod error;
 use core::{
     cell::{Cell, RefCell},
     mem::size_of,
-    ptr::{null_mut, write_unaligned, Pointee},
+    ptr::{null_mut, write_unaligned},
 };
 
 #[cfg(not(feature = "ptr_metadata"))]
 use core::marker::PhantomData;
+
+#[cfg(feature = "ptr_metadata")]
+use core::ptr::Pointee;
 
 #[cfg(feature = "std")]
 mod std_imports {
@@ -1045,6 +1048,7 @@ impl<S: ImplDetails> Drop for ContiguousMemory<S> {
 }
 
 /// A reference to `T` data stored in a [`ContiguousMemory`] structure.
+#[cfg_attr(feature = "debug", derive(Debug))]
 pub struct CMRef<T: ?Sized, S: ImplDetails = NotThreadSafeImpl> {
     base: S::Base,
     range: ByteRange,
@@ -1078,7 +1082,7 @@ impl<T: Sized, S: ImplDetails> CMRef<T, S> {
 }
 
 #[cfg(not(feature = "ptr_metadata"))]
-impl<T: ?Sized, S: ImplDetails> CMRef<T, S> {
+impl<T: Sized, S: ImplDetails> CMRef<T, S> {
     /// Tries accessing referenced data at its current location.
     ///
     /// Returns a [`Poisoned`](ContiguousMemoryError::Poisoned) error if the Mutex

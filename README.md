@@ -1,6 +1,10 @@
 # contiguous_mem
 
-Contiguous memory is memory that is allocated in one contiguous block.
+contiguous_mem implements a contiguous memory storage container for arbitrary data types.
+
+[![Crates.io](https://img.shields.io/crates/v/contiguous_mem)](https://crates.io/crates/contiguous_mem)
+[![Documentation](https://docs.rs/contiguous_mem/badge.svg)](https://docs.rs/contiguous_mem)
+
 Designed for both standard and no_std environments, this library ensures efficient memory allocation while being simple and (somewhat) safe to use.
 
 ## Key Features
@@ -18,14 +22,14 @@ Add the crate to your dependencies:
 
 ```toml
 [dependencies]
-contiguous_mem = "0.1.0"
+contiguous_mem = "0.1.*"
 ```
 
 Optionally disable the `std` feature and enable `no_std` feature to use in `no_std` environment:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.1.0", default-features = false, features = ["no_std"] }
+contiguous_mem = { version = "0.1.*", default-features = false, features = ["no_std"] }
 ```
 
 ### Example usage
@@ -53,6 +57,13 @@ fn main() {
     println!("Retrieved number: {}", retrieved_number);
 }
 ```
+
+### Features
+
+- `std` (default) - enables support for `std` environment
+- `no_std` - enables support for `no_std` environment
+- `debug` - enables `derive(Debug)` on structures
+- `ptr_metadata` - enables support for casting returned references into `dyn Trait` types
 
 ## Contributions
 
