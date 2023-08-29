@@ -2,6 +2,8 @@
 
 use core::alloc::Layout;
 
+#[cfg(any(feature = "no_std"))]
+use crate::types::*;
 use crate::{error::ContiguousMemoryError, range::ByteRange};
 
 /// A structure that keeps track of unused regions of memory within provided
@@ -68,13 +70,13 @@ impl AllocationTracker {
                 .unused
                 .last_mut()
                 .ok_or(ContiguousMemoryError::Unshrinkable {
-                    min_required: self.size,
+                    required_size: self.size,
                 })?;
 
             let reduction = self.size - new_size;
             if last.len() < reduction {
                 return Err(ContiguousMemoryError::Unshrinkable {
-                    min_required: self.size - last.len(),
+                    required_size: self.size - last.len(),
                 });
             }
             last.1 -= reduction;
@@ -101,6 +103,21 @@ impl AllocationTracker {
             self.size = new_size;
         }
         Ok(())
+    }
+
+    /// Removes tailing area of tracked memory bounds if it is marked as free
+    /// and returns the new (reduced) size.
+    ///
+    /// If the tailing area was marked as occupied `None` is returned instead.
+    pub fn shrink_to_fit(&mut self) -> Option<usize> {
+        match self.unused.last() {
+            Some(it) if it.1 == self.size => {
+                let last = self.unused.pop().expect("free byte ranges isn't empty");
+                self.size -= last.len();
+                Some(self.size)
+            }
+            _ => None,
+        }
     }
 
     /// Returns the next free memory region that can accommodate the given type

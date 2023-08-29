@@ -1,4 +1,4 @@
-//! Module re-exporting used types to help with `no_std` support.
+//! Module re-exporting used types any polyfill to help with feature support.
 
 #[cfg(feature = "std")]
 mod std_imports {
@@ -7,8 +7,9 @@ mod std_imports {
     pub use std::sync::Mutex;
     pub use std::sync::MutexGuard;
 
-    pub use std::alloc;
+    pub use std::alloc as allocator;
 }
+
 #[cfg(feature = "std")]
 pub use std_imports::*;
 
@@ -17,7 +18,7 @@ mod nostd_imports {
     pub use spin::Mutex;
     pub use spin::MutexGuard;
 
-    pub use alloc::alloc;
+    pub use alloc::alloc as allocator;
 
     pub use ::alloc::vec::Vec;
 
@@ -65,7 +66,7 @@ impl<T> LockTypesafe<T> for Mutex<T> {
     }
     fn try_lock_named(
         &self,
-        which: MutexKind,
+        _which: MutexKind,
     ) -> Result<MutexGuard<T>, crate::error::LockingError> {
         match self.try_lock() {
             Some(it) => Ok(it),
@@ -73,3 +74,96 @@ impl<T> LockTypesafe<T> for Mutex<T> {
         }
     }
 }
+
+/// Size requirements for types pointed to by references
+#[cfg(feature = "ptr_metadata")]
+pub trait RefSizeReq {}
+#[cfg(feature = "ptr_metadata")]
+impl<T: ?Sized> RefSizeReq for T {}
+
+/// Size requirements for types pointed to by references
+#[cfg(not(feature = "ptr_metadata"))]
+pub trait RefSizeReq: Sized {}
+#[cfg(not(feature = "ptr_metadata"))]
+impl<T: Sized> RefSizeReq for T {}
+
+/// Type requirements for values that can be stored.
+#[cfg(any(feature = "ptr_metadata", feature = "leak_data"))]
+pub trait StoreRequirements: 'static {}
+#[cfg(any(feature = "ptr_metadata", feature = "leak_data"))]
+impl<T: 'static> StoreRequirements for T {}
+
+/// Type requirements for values that can be stored.
+#[cfg(all(not(feature = "ptr_metadata"), not(feature = "leak_data")))]
+pub trait StoreRequirements: Copy {}
+#[cfg(all(not(feature = "ptr_metadata"), not(feature = "leak_data")))]
+impl<T: Copy> StoreRequirements for T {}
+
+#[cfg(feature = "ptr_metadata")]
+pub use core::marker::Unsize;
+#[cfg(feature = "ptr_metadata")]
+pub use core::ptr::{DynMetadata, Pointee};
+
+/// Provides some extensions for `ptr_metadata`.
+#[cfg(feature = "ptr_metadata")]
+pub mod pointer {
+    use super::*;
+    use core::{any::type_name, ptr::NonNull};
+
+    /// Statically constructs fat pointer metadata.
+    pub const fn static_metadata<S, T: ?Sized>() -> <T as Pointee>::Metadata
+    where
+        S: Unsize<T>,
+    {
+        let (_, metadata) = (NonNull::<S>::dangling().as_ptr() as *const T).to_raw_parts();
+        metadata
+    }
+
+    /// Trait that provides static pointer metadata based on type arguments.
+    pub trait TryMetadata<T: ?Sized> {
+        /// Returns [`<T as Pointee>::Metadata`](Pointee::Metadata) if `Self`
+        /// implements `T` trait, otherwise `None` is returned.
+        fn try_new() -> Option<<T as Pointee>::Metadata>;
+        /// Returns [`<T as Pointee>::Metadata`](Pointee::Metadata) if `Self`
+        /// implements `T` trait and panics if it doesn't.
+        fn new() -> <T as Pointee>::Metadata {
+            match Self::try_new() {
+                Some(it) => it,
+                None => panic!(
+                    "{} not implemented for {}",
+                    type_name::<T>(),
+                    type_name::<Self>()
+                ),
+            }
+        }
+    }
+    impl<S, T: ?Sized> TryMetadata<T> for S {
+        default fn try_new() -> Option<<T as Pointee>::Metadata> {
+            None
+        }
+    }
+    impl<S, T: ?Sized> TryMetadata<T> for S
+    where
+        S: Unsize<T>,
+    {
+        fn try_new() -> Option<<T as Pointee>::Metadata> {
+            Some(static_metadata::<S, T>())
+        }
+    }
+
+    /// Allows dynamically dropping arbitrary types.
+    ///
+    /// This is a workaround for invoking [`Drop::drop`] as well as calling
+    /// compiler generated drop glue dynamically.
+    pub trait HandleDrop {
+        fn do_drop(&mut self);
+    }
+    impl<T: ?Sized> HandleDrop for T {
+        #[inline(never)]
+        fn do_drop(&mut self) {
+            unsafe { core::ptr::drop_in_place(self as *mut Self) }
+        }
+    }
+}
+#[cfg(feature = "ptr_metadata")]
+pub use pointer::*;

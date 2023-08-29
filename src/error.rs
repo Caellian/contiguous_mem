@@ -11,7 +11,9 @@ use std::sync::MutexGuard;
 use std::sync::PoisonError;
 
 use core::alloc::LayoutError;
-use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
+use core::fmt::Debug;
+#[cfg(any(feature = "std", feature = "error_in_core"))]
+use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use crate::range::ByteRange;
 
@@ -27,6 +29,7 @@ pub enum LockingError {
     WouldBlock,
 }
 
+#[cfg(any(feature = "std", feature = "error_in_core"))]
 impl Display for LockingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -89,23 +92,24 @@ where
 /// Error returned when multiple concurrent mutable access' are attempted to
 /// the same memory region.
 #[derive(Debug)]
-pub struct BorrowMutError {
+pub struct MutablyBorrowed {
     /// [`ByteRange`] that was attempted to be borrowed.
     pub range: ByteRange,
 }
 
-impl Display for BorrowMutError {
+#[cfg(any(feature = "std", feature = "error_in_core"))]
+impl Display for MutablyBorrowed {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
-            "attempted to mutably borrow already borrowed memory region: {}",
+            "attempted to borrow already mutably borrowed memory region: {}",
             self.range
         )
     }
 }
 
 #[cfg(any(feature = "std", feature = "error_in_core"))]
-impl Error for BorrowMutError {
+impl Error for MutablyBorrowed {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
     }
@@ -121,21 +125,22 @@ pub enum ContiguousMemoryError {
     /// Attempted to occupy a memory region that is already marked as taken.
     AlreadyUsed,
     /// Attempted to operate on a memory region that is not contained within the
-    /// [`AllocationTracker`](crate::AllocationTracker).
+    /// [`AllocationTracker`](crate::tracker::AllocationTracker).
     NotContained,
     /// Attempted to free memory that has already been deallocated.
     DoubleFree,
-    /// The [`AllocationTracker`](crate::AllocationTracker) does not allow
-    /// shrinking to the expected size.
+    /// The [`AllocationTracker`](crate::tracker::AllocationTracker) does not
+    /// allow shrinking to the expected size.
     Unshrinkable {
         /// The minimum required size for shrinking the
         /// [`ContiguousMemory`](crate::ContiguousMemory) container.
-        min_required: usize,
+        required_size: usize,
     },
     /// Indicates that a mutex wasn't lockable.
     Lock(LockingError),
-    /// Attempted to borrow the [`AllocationTracker`](crate::AllocationTracker)
-    /// which is already in use.
+    /// Attempted to borrow the
+    /// [`AllocationTracker`](crate::tracker::AllocationTracker) which is
+    /// already in use.
     TrackerInUse,
     /// Indicates that the provided [`Layout`](std::alloc::Layout) is invalid.
     Layout(
@@ -144,7 +149,7 @@ pub enum ContiguousMemoryError {
         LayoutError,
     ),
     /// Tried mutably borrowing already borrowed region of memory
-    BorrowMut(BorrowMutError),
+    BorrowMut(MutablyBorrowed),
 }
 
 /// Represents possible poisoning sources for mutexes in [`LockingError`].
@@ -152,14 +157,15 @@ pub enum ContiguousMemoryError {
 pub enum MutexKind {
     /// Mutex containing the base memory offset was poisoned.
     BaseAddress,
-    /// [`AllocationTracker`](crate::AllocationTracker) mutex was poisoned.
+    /// [`AllocationTracker`](crate::tracker::AllocationTracker) mutex was
+    /// poisoned.
     AllocationTracker,
     /// Concurrent mutable access exclusion flag mutex in
     /// [`ReferenceState`](crate::ReferenceState) was poisoned.
     Reference,
 }
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "error_in_core"))]
 impl Display for ContiguousMemoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -177,7 +183,9 @@ impl Display for ContiguousMemoryError {
                 f,
                 "Attempted to free a memory region that is already marked as free"
             ),
-            ContiguousMemoryError::Unshrinkable { min_required } => write!(
+            ContiguousMemoryError::Unshrinkable {
+                required_size: min_required,
+            } => write!(
                 f,
                 "Cannot shrink memory regions; minimum required space: {} bytes",
                 min_required

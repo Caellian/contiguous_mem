@@ -15,14 +15,20 @@ categories = [
 ]
 repository = "https://github.com/Caellian/contiguous_mem"
 
+[[example]]
+name = "ptr_metadata"
+path = "examples/ptr_metadata.rs"
+required-features = ["ptr_metadata"]
+
 [dependencies]
 portable-atomic = { version = "1", default-features = false }
 spin = { version = "0.9", optional = true }
 
 [features]
-default = ["std"]
+default = ["std", "leak_data"]
 std = ["portable-atomic/std"]
 no_std = ["dep:spin"]
 debug = []
+leak_data = []
 ptr_metadata = []
 error_in_core = []
