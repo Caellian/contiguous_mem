@@ -22,14 +22,14 @@ Add the crate to your dependencies:
 
 ```toml
 [dependencies]
-contiguous_mem = "0.1.*"
+contiguous_mem = "0.2.*"
 ```
 
 Optionally disable the `std` feature and enable `no_std` feature to use in `no_std` environment:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.1.*", default-features = false, features = ["no_std"] }
+contiguous_mem = { version = "0.2.*", default-features = false, features = ["no_std"] }
 ```
 
 ### Example usage
@@ -64,6 +64,7 @@ fn main() {
 - `no_std` - enables support for `no_std` environment
 - `debug` - enables `derive(Debug)` on structures
 - `ptr_metadata` - enables support for casting returned references into `dyn Trait` types
+- `error_in_core` - enables support for `core::error::Error` in `no_std` environment
 
 ## Contributions
 
