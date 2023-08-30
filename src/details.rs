@@ -13,13 +13,14 @@ use portable_atomic::AtomicUsize;
 use crate::{
     error::{ContiguousMemoryError, LockingError, MutexKind},
     range::ByteRange,
+    refs::{ContiguousMemoryRef, ReferenceState, SyncContiguousMemoryRef},
     tracker::AllocationTracker,
     types::*,
-    ContiguousMemoryRef, ContiguousMemoryState, ReferenceState, SyncContiguousMemoryRef,
+    ContiguousMemoryState,
 };
 
 #[allow(unused_imports)]
-use crate::ContiguousMemory;
+use crate::ContiguousMemoryStorage;
 
 /// Implementation details of [`ContiguousMemory`].
 pub trait MemoryImpl: Sized {
@@ -61,10 +62,10 @@ pub trait MemoryImpl: Sized {
     fn get_capacity(base: &Self::State) -> usize;
 
     /// Resizes and reallocates the base memory according to new capacity.
-    fn resize(
+    fn resize_container(
         state: &mut Self::State,
         new_capacity: usize,
-    ) -> Result<*mut u8, ContiguousMemoryError>;
+    ) -> Result<Option<*mut u8>, ContiguousMemoryError>;
 
     /// Deallocates the base memory using layout information.
     fn deallocate(base: &Self::Base, layout: Layout);
@@ -131,17 +132,22 @@ impl MemoryImpl for ImplConcurrent {
         base.size.load(portable_atomic::Ordering::AcqRel)
     }
 
-    fn resize(
+    fn resize_container(
         state: &mut Self::State,
         new_capacity: usize,
-    ) -> Result<*mut u8, ContiguousMemoryError> {
+    ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
         let layout = Layout::from_size_align(Self::get_capacity(state), state.alignment)?;
-        let mut lock = state.base.lock_named(MutexKind::BaseAddress)?;
-        *lock = unsafe { allocator::realloc(*lock, layout, new_capacity) };
+        let mut base_addr = state.base.lock_named(MutexKind::BaseAddress)?;
+        let prev_addr = *base_addr;
+        *base_addr = unsafe { allocator::realloc(*base_addr, layout, new_capacity) };
         state
             .size
             .store(new_capacity, portable_atomic::Ordering::AcqRel);
-        Ok(*lock)
+        Ok(if *base_addr != prev_addr {
+            Some(*base_addr)
+        } else {
+            None
+        })
     }
 
     fn deallocate(base: &Self::Base, layout: Layout) {
@@ -214,15 +220,20 @@ impl MemoryImpl for ImplDefault {
         base.size.get()
     }
 
-    fn resize(
+    fn resize_container(
         state: &mut Self::State,
         new_capacity: usize,
-    ) -> Result<*mut u8, ContiguousMemoryError> {
+    ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
         let layout = Layout::from_size_align(state.size.get(), state.alignment)?;
-        let value = unsafe { allocator::realloc(state.base.get(), layout, new_capacity) };
-        state.base.set(value);
+        let prev_base = state.base.get();
+        let new_base = unsafe { allocator::realloc(prev_base, layout, new_capacity) };
+        state.base.set(new_base);
         state.size.set(new_capacity);
-        Ok(value)
+        Ok(if new_base != prev_base {
+            Some(new_base)
+        } else {
+            None
+        })
     }
 
     fn deallocate(base: &Self::Base, layout: Layout) {
@@ -253,13 +264,11 @@ impl MemoryImpl for ImplDefault {
     }
 }
 
-/// A marker struct representing the behavior specialization for a highly
-/// performance-optimized, yet unsafe implementation within
-/// [`ContiguousMemory`]. This trait is used when the
-/// exact required size is known during construction, and when the container is
-/// guaranteed to outlive any pointers to data contained in the memory block.
-pub struct ImplFixed;
-impl MemoryImpl for ImplFixed {
+/// A marker struct representing the behavior specialization for unsafe
+/// implementation. Should be used when the container is guaranteed to outlive
+/// any pointers to data contained in represented memory block.
+pub struct ImplUnsafe;
+impl MemoryImpl for ImplUnsafe {
     type State = ContiguousMemoryState<Self>;
     type Base = *mut u8;
     type AllocationTracker = AllocationTracker;
@@ -293,11 +302,19 @@ impl MemoryImpl for ImplFixed {
         base.size
     }
 
-    fn resize(
-        _state: &mut Self::State,
-        _new_capacity: usize,
-    ) -> Result<*mut u8, ContiguousMemoryError> {
-        unimplemented!("can't reallocate ContiguousMemory with ImplFixed");
+    fn resize_container(
+        state: &mut Self::State,
+        new_capacity: usize,
+    ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
+        let layout = Layout::from_size_align(state.size, state.alignment)?;
+        let prev_base = state.base;
+        state.base = unsafe { allocator::realloc(state.base, layout, new_capacity) };
+        state.size = new_capacity;
+        Ok(if state.base != prev_base {
+            Some(state.base)
+        } else {
+            None
+        })
     }
 
     fn deallocate(base: &Self::Base, layout: Layout) {
@@ -307,10 +324,10 @@ impl MemoryImpl for ImplFixed {
     }
 
     fn resize_tracker(
-        _state: &mut Self::State,
-        _new_capacity: usize,
+        state: &mut Self::State,
+        new_capacity: usize,
     ) -> Result<(), ContiguousMemoryError> {
-        Err(ContiguousMemoryError::NoStorageLeft)
+        state.tracker.resize(new_capacity)
     }
 
     fn shrink_tracker(state: &mut Self::State) -> Result<Option<usize>, LockingError> {
@@ -464,8 +481,8 @@ impl ReferenceImpl for ImplDefault {
     }
 }
 
-impl ReferenceImpl for ImplFixed {
-    type MemoryState = <ImplFixed as MemoryImpl>::State;
+impl ReferenceImpl for ImplUnsafe {
+    type MemoryState = <ImplUnsafe as MemoryImpl>::State;
     type RefState<T: ?Sized> = ();
     type RefMutLock = ();
     type RefMutGuard<'a> = ();

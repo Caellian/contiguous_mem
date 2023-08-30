@@ -20,48 +20,51 @@ compile_error!(
 pub mod details;
 pub mod error;
 pub mod range;
+pub mod refs;
 pub mod tracker;
 mod types;
 
 use details::*;
 use range::ByteRange;
+use refs::{ContiguousMemoryRef, SyncContiguousMemoryRef};
 use types::*;
 
 use core::{
     alloc::{Layout, LayoutError},
-    marker::PhantomData,
     mem::{size_of, ManuallyDrop},
-    ops::DerefMut,
+    ops::Deref,
 };
 
-use error::{ContiguousMemoryError, LockingError, MutablyBorrowed};
+use error::{ContiguousMemoryError, LockingError};
+
+/// Module re-exporting commonly needed types.
+pub mod prelude {
+    pub use crate::{
+        error::*, range::ByteRange, refs::*, ContiguousMemory, ContiguousMemoryStorage, StoreData,
+        SyncContiguousMemory, UnsafeContiguousMemory,
+    };
+}
 
 /// A memory container for efficient allocation and storage of contiguous data.
 ///
-/// This structure manages a contiguous block of memory, allowing for the
-/// storage of arbitrary data while ensuring that stored items are placed
-/// adjacently without imposing any restrictions on layout, such as those found
-/// in memory pools or the standard library's [Vec].
-///
-/// The `ContiguousMemory` type is particularly useful for scenarios where data
-/// locality and efficient memory usage are crucial, as it provides a means to
-/// allocate and manage memory in a linear fashion.
-///
-/// # Performance
-///
-/// The [`store`] operation has a generally constant time complexity when
-/// storing items with the same layout, as it primarily involves finding
-/// available memory regions. The time complexity increases linearly with the
-/// number of gaps between previously stored items, making it an effective
-/// choice for maintaining data locality.
-///
-/// [`store`]: ContiguousMemory::store
+/// This collection manages a contiguous block of memory, allowing for storage
+/// of arbitrary data types while ensuring that stored items are placed
+/// adjacently and ensuring they're properly alligned.
 #[cfg_attr(feature = "debug", derive(Debug))]
-pub struct ContiguousMemory<S: MemoryImpl = ImplDefault> {
+pub struct ContiguousMemoryStorage<S: MemoryImpl = ImplDefault> {
     inner: S::State,
 }
 
+impl Clone for ContiguousMemoryStorage<ImplUnsafe> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 /// Internal state of [`ContiguousMemory`].
+#[cfg_attr(feature = "debug", derive(Debug))]
 pub struct ContiguousMemoryState<S: MemoryImpl = ImplDefault> {
     base: S::Base,
     size: S::SizeType,
@@ -69,7 +72,7 @@ pub struct ContiguousMemoryState<S: MemoryImpl = ImplDefault> {
     tracker: S::AllocationTracker,
 }
 
-impl Clone for ContiguousMemoryState<ImplFixed> {
+impl Clone for ContiguousMemoryState<ImplUnsafe> {
     fn clone(&self) -> Self {
         Self {
             base: self.base,
@@ -80,7 +83,7 @@ impl Clone for ContiguousMemoryState<ImplFixed> {
     }
 }
 
-impl<S: MemoryImpl> core::ops::Deref for ContiguousMemory<S> {
+impl<S: MemoryImpl> Deref for ContiguousMemoryStorage<S> {
     type Target = ContiguousMemoryState<S>;
 
     fn deref(&self) -> &Self::Target {
@@ -98,58 +101,31 @@ impl<S: MemoryImpl> ContiguousMemoryState<S> {
     }
 }
 
-impl<S: MemoryImpl> ContiguousMemory<S> {
-    /// Creates a new `ContiguousMemory` instance with the specified capacity.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - The initial capacity of the memory container.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the newly created `ContiguousMemory` instance on
-    /// success, or a `LayoutError` if the memory layout cannot be satisfied.
+impl<S: MemoryImpl> ContiguousMemoryStorage<S> {
+    /// Creates a new `ContiguousMemory` instance with the specified `capacity`.
     pub fn new(capacity: usize) -> Self {
-        Self::new_aligned(capacity, 1)
-            .expect("unable to create a ContiguousMemory with alignment of 1")
+        Self::new_aligned(capacity, core::mem::align_of::<usize>())
+            .expect("unable to create a ContiguousMemory with usize alignment")
     }
 
-    /// Creates a new `ContiguousMemory` instance with the specified capacity
-    /// and alignment.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - The initial capacity of the memory container.
-    /// * `alignment` - The alignment requirement for memory allocations.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the newly created `ContiguousMemory` instance on
-    /// success, or a `LayoutError` if the memory layout cannot be satisfied.
+    /// Creates a new `ContiguousMemory` instance with the specified `capacity`
+    /// and `alignment`.
     pub fn new_aligned(capacity: usize, alignment: usize) -> Result<Self, LayoutError> {
         let layout = Layout::from_size_align(capacity, alignment)?;
         let base = unsafe { allocator::alloc(layout) };
-        Ok(ContiguousMemory {
+        Ok(ContiguousMemoryStorage {
             inner: S::build_state(base, capacity, alignment)?,
         })
     }
 
-    /// Retrieves the base address of the allocated memory.
+    /// Returns the base address (`*mut u8`) of the allocated memory.
     ///
-    /// # Safety
+    /// # Errors
     ///
-    /// This function is marked as unsafe because it returns a raw pointer to
-    /// the allocated memory.
-    ///
-    /// # Returns
-    ///
-    /// - If the implementation details type `S` is
-    ///   [`ImplConcurrent`], the result will be a
-    ///   `Result<*mut u8, [LockingError](crate::LockingError::Poisoned)>` which
-    ///   only errors if the mutex holding the base address fails.
-    ///
-    /// - For other implementation base address `*mut u8` is returned directly.
-    pub unsafe fn get_base(&self) -> S::LockResult<*mut u8> {
+    /// For [concurrent implementation](ImplConcurrent) this function can return
+    /// [LockingError::Poisoned](crate::LockingError::Poisoned) if the mutex
+    /// holding the base address has been poisoned.
+    pub fn get_base(&self) -> S::LockResult<*mut u8> {
         S::get_base(&self.inner)
     }
 
@@ -162,51 +138,51 @@ impl<S: MemoryImpl> ContiguousMemory<S> {
         S::get_capacity(&self.inner)
     }
 
-    /// Resizes the memory container to the specified capacity.
+    /// Resizes the memory container to the specified `new_capacity`, optionally
+    /// returning the new base address of the stored items.
     ///
-    /// This function can either grow or shrink the container based on the new
-    /// capacity.
+    /// Shrinking the container is generally performed in place by freeing
+    /// tailing memory space, but growing it can move the data in memory to find
+    /// a location that can fit it.
     ///
-    /// # Arguments
-    ///
-    /// * `new_capacity` - The desired new capacity of the memory container.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success on resizing the container, or a
-    /// `ContiguousMemoryError` if an error occurs.
+    /// [Unsafe implementation](ImplUnsafe) should match on the returned value
+    /// and update any existing pointers accordingly.
     ///
     /// # Errors
     ///
     /// This function can return the following errors:
     ///
-    /// - [`ContiguousMemoryError::Unshrinkable`]: This error occurs when
-    ///   attempting to shrink the memory container, but the stored data
-    ///   prevents the container from being shrunk to the desired capacity.
+    /// - [`ContiguousMemoryError::Unshrinkable`]: Returned when attempting to
+    ///   shrink the memory container, but the stored data prevents the
+    ///   container from being shrunk to the desired capacity.
     ///
-    /// - [`ContiguousMemoryError::Lock`]: This error can occur if the mutex
-    ///   holding the base address or the [`AllocationTracker`] is poisoned.
+    /// - [`ContiguousMemoryError::Lock`]: Returned if the mutex holding the
+    ///   base address or the [`AllocationTracker`] is poisoned.
     ///
     /// [`AllocationTracker`]: crate::tracker::AllocationTracker
-    pub fn resize(&mut self, new_capacity: usize) -> Result<(), ContiguousMemoryError> {
+    pub fn resize(
+        &mut self,
+        new_capacity: usize,
+    ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
         if new_capacity == S::get_capacity(&self.inner) {
-            return Ok(());
+            return Ok(None);
         }
 
         let old_capacity = S::get_capacity(&self.inner);
         S::resize_tracker(&mut self.inner, new_capacity)?;
-        match S::resize(&mut self.inner, new_capacity) {
-            Ok(_) => {}
+        let moved = match S::resize_container(&mut self.inner, new_capacity) {
+            Ok(it) => it,
             Err(ContiguousMemoryError::Lock(lock_err)) if S::USE_LOCKS => {
                 S::resize_tracker(&mut self.inner, old_capacity)?;
                 return Err(ContiguousMemoryError::Lock(lock_err));
             }
             Err(other) => return Err(other),
-        }
+        };
 
-        Ok(())
+        Ok(moved)
     }
 
+    /// Shrinks the allocated memory to fit the currently stored data.
     pub fn shrink_to_fit(&mut self) -> Result<(), ContiguousMemoryError> {
         if let Some(shrunk) = S::shrink_tracker(&mut self.inner)? {
             self.resize(shrunk)?;
@@ -214,48 +190,21 @@ impl<S: MemoryImpl> ContiguousMemory<S> {
         Ok(())
     }
 
-    /// Stores a value of type `T` in the memory container.
+    /// Stores a `value` of type `T` in the contiguous memory block.
     ///
-    /// This operation allocates memory for the provided value and stores it in
-    /// the contiguous memory block.
+    /// Value type is used to deduce type size and returned reference dropping
+    /// behavior.
     ///
-    /// # Arguments
+    /// Returned value is implementation specific:
+    /// - For [concurrent implementation] it is
+    ///   `Result<SyncContiguousMemoryRef<T>, LockingError>`,
+    /// - For [default implementation] it is `ContiguousMemoryRef<T>`,
+    /// - For [fixed implementation] it is
+    ///   `Result<*mut u8, ContiguousMemoryError>`.
     ///
-    /// * `value` - The value of type `T` to be stored in the memory container.
-    ///
-    /// # Returns
-    ///
-    /// - If the implementation details are [`ImplDefault`] the result will be
-    ///   a [`ContiguousMemoryRef`] pointing to the stored value.
-    ///
-    ///
-    /// A `Result` that encapsulates the result of the storage operation:
-    ///
-    /// - If the implementation details are [`ImplConcurrent`], the result will
-    ///   be a [`SyncContiguousMemoryRef`] pointing to the stored value.
-    ///
-    ///
-    /// - If the implementation details are [`ImplFixed`], the result will be a
-    ///   raw pointer (`*mut T`) to the stored value.
-    ///
-    /// The returned [`Result`] indicates success or an error if the storage
-    /// operation encounters any issues.
-    ///
-    /// ## Errors
-    ///
-    /// When the implementation details are [`ImplConcurrent`]:
-    ///
-    /// - [`LockingError::Poisoned`]: This error can occur when the
-    ///   [`AllocationTracker`] associated with the memory container is
-    ///   poisoned.
-    ///
-    /// When the implementation details are [`ImplFixed`]:
-    ///
-    /// - [`ContiguousMemoryError::NoStorageLeft`]: Indicates that
-    ///   the container couldn't accommodate the provided data due to size
-    ///   limitations. Other implementation details grow the container instead.
-    ///
-    /// [`AllocationTracker`]: crate::tracker::AllocationTracker
+    /// [concurrent implementation]: struct.ContiguousMemory.html#method.store_data-1
+    /// [default implementation]: struct.ContiguousMemory.html#method.store_data
+    /// [fixed implementation]: struct.ContiguousMemory.html#method.store_data-2
     pub fn store<T: StoreRequirements>(&mut self, value: T) -> S::StoreResult<T>
     where
         Self: StoreData<S>,
@@ -268,9 +217,15 @@ impl<S: MemoryImpl> ContiguousMemory<S> {
     }
 }
 
-/// Trait for specializing store function across implementations
+/// Trait for specializing store function across implementations.
 pub trait StoreData<S: MemoryImpl> {
-    /// Works same as [`store`](ContiguousMemory::store) but takes a pointer and layout
+    /// Works same as [`store`](ContiguousMemory::store) but takes a pointer and
+    /// layout.
+    ///
+    /// Pointer type is used to deduce the destruction behavior for
+    /// implementations that return a reference, but can be disabled by casting
+    /// the provided pointer into `*mut ()` type and then calling
+    /// [`std::mem::transmute`] on the returned reference.
     unsafe fn store_data<T: StoreRequirements>(
         &mut self,
         data: *mut T,
@@ -278,11 +233,10 @@ pub trait StoreData<S: MemoryImpl> {
     ) -> S::StoreResult<T>;
 }
 
-impl StoreData<ImplConcurrent> for ContiguousMemory<ImplConcurrent> {
-    /// # Errors
-    ///
-    /// [`LockingError::Poisoned`]: This error can occur when the
-    /// [`AllocationTracker`] associated with the memory container is poisoned.
+impl StoreData<ImplConcurrent> for ContiguousMemoryStorage<ImplConcurrent> {
+    /// Returns a [`SyncContiguousMemoryRef`] pointing to the stored value, or a
+    /// [`LockingError::Poisoned`] error when the [`AllocationTracker`]
+    /// associated with the memory container is poisoned.
     ///
     /// [`AllocationTracker`]: crate::tracker::AllocationTracker
     unsafe fn store_data<T: StoreRequirements>(
@@ -300,7 +254,7 @@ impl StoreData<ImplConcurrent> for ContiguousMemory<ImplConcurrent> {
                 }
                 Err(ContiguousMemoryError::NoStorageLeft) => {
                     match self.resize(ImplConcurrent::get_capacity(&self.inner) * 2) {
-                        Ok(()) => {}
+                        Ok(_) => {}
                         Err(ContiguousMemoryError::Lock(locking_err)) => return Err(locking_err),
                         Err(other) => unreachable!(
                             "reached unexpected error while growing the container to store data: {:?}",
@@ -324,7 +278,8 @@ impl StoreData<ImplConcurrent> for ContiguousMemory<ImplConcurrent> {
     }
 }
 
-impl StoreData<ImplDefault> for ContiguousMemory<ImplDefault> {
+impl StoreData<ImplDefault> for ContiguousMemoryStorage<ImplDefault> {
+    /// Returns a [`ContiguousMemoryRef`] pointing to the stored value.
     unsafe fn store_data<T: StoreRequirements>(
         &mut self,
         data: *mut T,
@@ -341,7 +296,7 @@ impl StoreData<ImplDefault> for ContiguousMemory<ImplDefault> {
                 }
                 Err(ContiguousMemoryError::NoStorageLeft) => {
                     match self.resize(ImplDefault::get_capacity(&self.inner) * 2) {
-                        Ok(()) => {},
+                        Ok(_) => {},
                         Err(err) => unreachable!(
                             "reached unexpected error while growing the container to store data: {:?}",
                             err
@@ -359,14 +314,21 @@ impl StoreData<ImplDefault> for ContiguousMemory<ImplDefault> {
     }
 }
 
-impl StoreData<ImplFixed> for ContiguousMemory<ImplFixed> {
+impl StoreData<ImplUnsafe> for ContiguousMemoryStorage<ImplUnsafe> {
+    /// Returns a raw pointer (`*mut T`) to the stored value or a
+    /// [`ContiguousMemoryError::NoStorageLeft`] indicating that the container
+    /// couldn't store the provided data with current size.
+    ///
+    /// Memory block can still be grown by calling [`ContiguousMemory::resize`],
+    /// but it can't be done automatically as that would invalidate all the
+    /// existing pointers without any indication.
     unsafe fn store_data<T: StoreRequirements>(
         &mut self,
         data: *mut T,
         layout: Layout,
     ) -> Result<*mut T, ContiguousMemoryError> {
         let (addr, range) = loop {
-            match ImplFixed::next_free(&mut self.inner, layout) {
+            match ImplUnsafe::next_free(&mut self.inner, layout) {
                 Ok(taken) => {
                     let found = (taken.0 + self.base as usize) as *mut u8;
                     unsafe {
@@ -378,11 +340,11 @@ impl StoreData<ImplFixed> for ContiguousMemory<ImplFixed> {
             }
         };
 
-        Ok(ImplFixed::build_ref(&self.inner, addr as *mut T, &range))
+        Ok(ImplUnsafe::build_ref(&self.inner, addr as *mut T, &range))
     }
 }
 
-impl ContiguousMemory<ImplFixed> {
+impl ContiguousMemoryStorage<ImplUnsafe> {
     #[inline(always)]
     pub unsafe fn free_typed<T>(&mut self, value: *mut T) {
         Self::free(self, value, size_of::<T>())
@@ -390,340 +352,29 @@ impl ContiguousMemory<ImplFixed> {
 
     pub unsafe fn free<T>(&mut self, value: *mut T, size: usize) {
         let pos: usize = value.sub(self.get_base() as usize) as usize;
-        if let Some(freed) = ImplFixed::free_region(&mut self.inner, ByteRange(pos, pos + size)) {
+        if let Some(freed) = ImplUnsafe::free_region(&mut self.inner, ByteRange(pos, pos + size)) {
             core::ptr::drop_in_place(freed as *mut T);
         }
     }
 }
 
-/// A type alias for [`ContiguousMemory`] that enables
-/// references to data stored within it to be used safely across multiple
-/// threads.
-pub type SyncContiguousMemory = ContiguousMemory<ImplConcurrent>;
+/// A type alias for [`ContiguousMemory`] that enables references to data stored
+/// within it to be used safely across multiple threads.
+pub type SyncContiguousMemory = ContiguousMemoryStorage<ImplConcurrent>;
 
-/// A type alias for [`ContiguousMemory`] that offers
-/// a synchronous implementation without using internal mutexes making it
-/// faster but not thread safe.
-pub type GrowableContiguousMemory = ContiguousMemory<ImplDefault>;
+/// A type alias for [`ContiguousMemory`] that offers a synchronous
+/// implementation without using internal mutexes making it faster but not
+/// thread safe.
+pub type ContiguousMemory = ContiguousMemoryStorage<ImplDefault>;
 
-/// A type alias for [`ContiguousMemory`] that provides
-/// a highly performance-optimized (unsafe) implementation. Suitable when the
-/// required size is known upfront and the container is guaranteed to outlive
-/// any returned pointers.
-pub type FixedContiguousMemory = ContiguousMemory<ImplFixed>;
+/// A type alias for [`ContiguousMemory`] that provides a performance-optimized
+/// (unsafe) implementation. Suitable when the container is guaranteed to
+/// outlive any returned pointers.
+pub type UnsafeContiguousMemory = ContiguousMemoryStorage<ImplUnsafe>;
 
-impl<S: MemoryImpl> Drop for ContiguousMemory<S> {
+impl<S: MemoryImpl> Drop for ContiguousMemoryStorage<S> {
     fn drop(&mut self) {
         S::deallocate(&self.base, self.layout())
-    }
-}
-
-/// A synchronized (thread-safe) reference to `T` data stored in a
-/// [`ContiguousMemory`] structure.
-pub struct SyncContiguousMemoryRef<T: ?Sized> {
-    inner: Arc<ReferenceState<T, ImplConcurrent>>,
-    #[cfg(feature = "ptr_metadata")]
-    metadata: <T as Pointee>::Metadata,
-    #[cfg(not(feature = "ptr_metadata"))]
-    _phantom: PhantomData<T>,
-}
-
-/// A shorter type name for [`SyncContiguousMemoryRef`].
-pub type SCMRef<T> = SyncContiguousMemoryRef<T>;
-
-impl<T: ?Sized> SyncContiguousMemoryRef<T> {
-    /// Tries accessing referenced data at its current location.
-    ///
-    /// # Errors
-    ///
-    /// This function returns
-    /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
-    /// if the Mutex holding the `base` address pointer has been poisoned.
-    pub fn get(&self) -> Result<&T, LockingError>
-    where
-        T: RefSizeReq,
-    {
-        unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state)?;
-            let pos = base.add(self.inner.range.0);
-
-            #[cfg(not(feature = "ptr_metadata"))]
-            {
-                Ok(&*(pos as *mut T))
-            }
-            #[cfg(feature = "ptr_metadata")]
-            {
-                Ok(&*core::ptr::from_raw_parts(pos as *const (), self.metadata))
-            }
-        }
-    }
-
-    /// Tries accessing referenced data at its current location and hangs the
-    /// current thread if the referenced data is already mutably borrowed.
-    ///
-    /// # Errors
-    ///
-    /// This function can return the following errors:
-    ///
-    /// - [`LockingError::Poisoned`] error if the Mutex holding the base address
-    ///   pointer or the Mutex holding concurrent mutable access flag has been
-    ///   poisoned.
-    pub fn get_mut<'a>(&'a self) -> Result<MemWriteGuard<'a, T, ImplConcurrent>, LockingError>
-    where
-        T: RefSizeReq,
-    {
-        let read = self
-            .inner
-            .already_borrowed
-            .lock_named(error::MutexKind::Reference)?;
-        unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state)?;
-            let pos = base.add(self.inner.range.0);
-            Ok(MemWriteGuard {
-                state: self.inner.clone(),
-                _guard: read,
-                #[cfg(not(feature = "ptr_metadata"))]
-                value: &mut *(pos as *mut T),
-                #[cfg(feature = "ptr_metadata")]
-                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata),
-            })
-        }
-    }
-
-    /// Tries accessing referenced data at its current location.
-    ///
-    /// # Errors
-    ///
-    /// This function can return the following errors:
-    ///
-    /// - [`LockingError::Poisoned`] error if the Mutex holding the base address
-    ///   pointer or the Mutex holding mutable access exclusion flag has been
-    ///   poisoned.
-    ///
-    /// - [`LockingError::WouldBlock`] error if accessing referenced data chunk
-    ///   would be blocking.
-    pub fn try_get_mut<'a>(&'a self) -> Result<MemWriteGuard<'a, T, ImplConcurrent>, LockingError>
-    where
-        T: RefSizeReq,
-    {
-        let read = self
-            .inner
-            .already_borrowed
-            .try_lock_named(error::MutexKind::Reference)?;
-        unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state)?;
-            let pos = base.add(self.inner.range.0);
-            Ok(MemWriteGuard {
-                state: self.inner.clone(),
-                _guard: read,
-                #[cfg(not(feature = "ptr_metadata"))]
-                value: &mut *(pos as *mut T),
-                #[cfg(feature = "ptr_metadata")]
-                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata),
-            })
-        }
-    }
-
-    #[cfg(feature = "ptr_metadata")]
-    pub fn into_dyn<R: ?Sized>(self) -> SyncContiguousMemoryRef<R>
-    where
-        T: Sized + Unsize<R>,
-    {
-        unsafe {
-            SyncContiguousMemoryRef {
-                inner: core::mem::transmute(self.inner),
-                metadata: static_metadata::<T, R>(),
-            }
-        }
-    }
-}
-
-impl<T: ?Sized> Clone for SyncContiguousMemoryRef<T> {
-    fn clone(&self) -> Self {
-        SyncContiguousMemoryRef {
-            inner: self.inner.clone(),
-            #[cfg(feature = "ptr_metadata")]
-            metadata: self.metadata.clone(),
-            #[cfg(not(feature = "ptr_metadata"))]
-            _phantom: PhantomData,
-        }
-    }
-}
-
-/// A thread-unsafe reference to `T` data stored in [`ContiguousMemory`]
-/// structure.
-pub struct ContiguousMemoryRef<T: ?Sized> {
-    inner: Rc<ReferenceState<T, ImplDefault>>,
-    #[cfg(feature = "ptr_metadata")]
-    metadata: <T as Pointee>::Metadata,
-    #[cfg(not(feature = "ptr_metadata"))]
-    _phantom: PhantomData<T>,
-}
-/// A shorter type name for [`ContiguousMemoryRef`].
-pub type CMRef<T> = ContiguousMemoryRef<T>;
-
-impl<T: ?Sized> ContiguousMemoryRef<T> {
-    /// Returns a reference to data at its current location.
-    pub fn get(&self) -> &T
-    where
-        T: RefSizeReq,
-    {
-        ContiguousMemoryRef::<T>::try_get(self).expect("mutably borrowed")
-    }
-
-    /// Returns a reference to data at its current location.
-    pub fn try_get(&self) -> Result<&T, MutablyBorrowed>
-    where
-        T: RefSizeReq,
-    {
-        if self.inner.already_borrowed.get() {
-            return Err(MutablyBorrowed {
-                range: self.inner.range,
-            });
-        }
-
-        unsafe {
-            let base = ImplDefault::get_base(&self.inner.state);
-            let pos = base.add(self.inner.range.0);
-
-            #[cfg(not(feature = "ptr_metadata"))]
-            {
-                Ok(&*(pos as *mut T))
-            }
-            #[cfg(feature = "ptr_metadata")]
-            {
-                Ok(&*core::ptr::from_raw_parts(pos as *const (), self.metadata))
-            }
-        }
-    }
-
-    /// Returns a mutable reference to data at its current location or the
-    /// [`MutablyBorrowed`] error if the represented memory region is already
-    /// mutably borrowed.
-    pub fn get_mut<'a>(&'a mut self) -> MemWriteGuard<'a, T, ImplDefault>
-    where
-        T: RefSizeReq,
-    {
-        ContiguousMemoryRef::<T>::try_get_mut(self).expect("mutably borrowed")
-    }
-
-    /// Returns a mutable reference to data at its current location or the
-    /// [`MutablyBorrowed`] error if the represented memory region is already
-    /// mutably borrowed.
-    pub fn try_get_mut<'a>(
-        &'a mut self,
-    ) -> Result<MemWriteGuard<'a, T, ImplDefault>, MutablyBorrowed>
-    where
-        T: RefSizeReq,
-    {
-        if self.inner.already_borrowed.get() {
-            return Err(MutablyBorrowed {
-                range: self.inner.range,
-            });
-        }
-
-        unsafe {
-            let base = ImplDefault::get_base(&self.inner.state);
-            let pos = base.add(self.inner.range.0);
-
-            Ok(MemWriteGuard {
-                state: self.inner.clone(),
-                _guard: (),
-                #[cfg(not(feature = "ptr_metadata"))]
-                value: &mut *(pos as *mut T),
-                #[cfg(feature = "ptr_metadata")]
-                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata),
-            })
-        }
-    }
-
-    #[cfg(feature = "ptr_metadata")]
-    pub fn into_dyn<R: ?Sized>(self) -> ContiguousMemoryRef<R>
-    where
-        T: Sized + Unsize<R>,
-    {
-        unsafe {
-            ContiguousMemoryRef {
-                inner: core::mem::transmute(self.inner),
-                metadata: static_metadata::<T, R>(),
-            }
-        }
-    }
-}
-
-impl<T: ?Sized> Clone for ContiguousMemoryRef<T> {
-    fn clone(&self) -> Self {
-        ContiguousMemoryRef {
-            inner: self.inner.clone(),
-            #[cfg(feature = "ptr_metadata")]
-            metadata: self.metadata.clone(),
-            #[cfg(not(feature = "ptr_metadata"))]
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<T: ?Sized> core::ops::Deref for ContiguousMemoryRef<T>
-where
-    T: RefSizeReq,
-{
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.get()
-    }
-}
-
-/// Internal state of [`ContiguousMemoryRef`] and [`SyncContiguousMemoryRef`].
-#[cfg_attr(feature = "debug", derive(Debug))]
-pub struct ReferenceState<T: ?Sized, S: ReferenceImpl = ImplDefault> {
-    state: S::MemoryState,
-    range: ByteRange,
-    already_borrowed: S::RefMutLock,
-    #[cfg(feature = "ptr_metadata")]
-    drop_metadata: DynMetadata<dyn HandleDrop>,
-    _phantom: PhantomData<T>,
-}
-
-impl<T: ?Sized, S: ReferenceImpl> Drop for ReferenceState<T, S> {
-    fn drop(&mut self) {
-        #[allow(unused_variables)]
-        if let Some(it) = S::free_region(&mut self.state, self.range) {
-            #[cfg(feature = "ptr_metadata")]
-            unsafe {
-                let drop: *mut dyn HandleDrop =
-                    core::ptr::from_raw_parts_mut::<dyn HandleDrop>(it, self.drop_metadata);
-                (&*drop).do_drop();
-            }
-        };
-    }
-}
-
-/// A smart reference wrapper responsible for tracking and managing a flag
-/// that indicates whether the memory segment is actively being written to.
-pub struct MemWriteGuard<'a, T: ?Sized, S: ReferenceImpl> {
-    state: S::RefState<T>,
-    _guard: S::RefMutGuard<'a>,
-    value: &'a mut T,
-}
-
-impl<'a, T: ?Sized, S: ReferenceImpl> core::ops::Deref for MemWriteGuard<'a, T, S> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.value
-    }
-}
-
-impl<'a, T: ?Sized, S: ReferenceImpl> DerefMut for MemWriteGuard<'a, T, S> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.value
-    }
-}
-
-impl<'a, T: ?Sized, S: ReferenceImpl> Drop for MemWriteGuard<'a, T, S> {
-    fn drop(&mut self) {
-        S::unborrow_ref::<T>(&self.state);
     }
 }
 
@@ -749,13 +400,13 @@ mod test {
 
     #[test]
     fn test_new_contiguous_memory() {
-        let memory = GrowableContiguousMemory::new(1024);
+        let memory = ContiguousMemory::new(1024);
         assert_eq!(memory.get_capacity(), 1024);
     }
 
     #[test]
     fn test_store_and_get_contiguous_memory() {
-        let mut memory = GrowableContiguousMemory::new(1024);
+        let mut memory = ContiguousMemory::new(1024);
 
         let person_a = Person {
             name: "Jerry".to_string(),
@@ -800,7 +451,7 @@ mod test {
 
     #[test]
     fn test_resize_contiguous_memory() {
-        let mut memory = GrowableContiguousMemory::new(512);
+        let mut memory = ContiguousMemory::new(512);
 
         let person_a = Person {
             name: "Larry".to_string(),
@@ -830,7 +481,7 @@ mod test {
 
     #[test]
     fn test_fixed_contiguous_memory() {
-        let mut memory = FixedContiguousMemory::new_aligned(1024, 8).unwrap();
+        let mut memory = UnsafeContiguousMemory::new_aligned(1024, 8).unwrap();
 
         let value = 42u32;
         let stored_ref = memory.store(value).unwrap();

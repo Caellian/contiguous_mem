@@ -30,11 +30,11 @@ pub use nostd_imports::*;
 
 use crate::error::{LockingError, MutexKind};
 
-/// Trait that adds a method which mimics std `Result::map_err` on a Lock in order to unify
-/// no_std and std environments.
+/// Trait that adds a method which mimics std `Result::map_err` on a Lock in
+/// order to unify no_std and std environments.
 ///
-/// This is necessary as [spin::Mutex::lock] doesn't return a Result but a [MutexGuard]
-/// directly.
+/// This is necessary as [spin::Mutex::lock] doesn't return a Result but a
+/// [MutexGuard] directly.
 pub(crate) trait LockTypesafe<T> {
     fn lock_named(&self, which: MutexKind) -> Result<MutexGuard<T>, crate::error::LockingError>;
     fn try_lock_named(&self, which: MutexKind)

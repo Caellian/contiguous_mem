@@ -1,6 +1,6 @@
 #![feature(ptr_metadata)]
 
-use contiguous_mem::{ContiguousMemoryRef, GrowableContiguousMemory};
+use contiguous_mem::{refs::ContiguousMemoryRef, ContiguousMemory};
 
 trait Greetable {
     fn print_hello(&self);
@@ -21,7 +21,7 @@ impl Greetable for Dog {
 }
 
 fn main() {
-    let mut storage = GrowableContiguousMemory::new(4096);
+    let mut storage = ContiguousMemory::new(4096);
     let person1 = storage.store(Person("Joe".to_string()));
 
     let person2: ContiguousMemoryRef<dyn Greetable> =
