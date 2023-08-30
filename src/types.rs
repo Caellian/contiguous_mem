@@ -104,14 +104,12 @@ pub use core::marker::Unsize;
 #[cfg(feature = "ptr_metadata")]
 pub use core::ptr::{DynMetadata, Pointee};
 
-/// Provides some extensions for `ptr_metadata`.
 #[cfg(feature = "ptr_metadata")]
-pub mod pointer {
+mod pointer {
     use super::*;
-    use core::{any::type_name, ptr::NonNull};
+    use core::ptr::NonNull;
 
-    /// Statically constructs fat pointer metadata.
-    pub const fn static_metadata<S, T: ?Sized>() -> <T as Pointee>::Metadata
+    pub(crate) const fn static_metadata<S, T: ?Sized>() -> <T as Pointee>::Metadata
     where
         S: Unsize<T>,
     {
@@ -119,43 +117,11 @@ pub mod pointer {
         metadata
     }
 
-    /// Trait that provides static pointer metadata based on type arguments.
-    pub trait TryMetadata<T: ?Sized> {
-        /// Returns [`<T as Pointee>::Metadata`](Pointee::Metadata) if `Self`
-        /// implements `T` trait, otherwise `None` is returned.
-        fn try_new() -> Option<<T as Pointee>::Metadata>;
-        /// Returns [`<T as Pointee>::Metadata`](Pointee::Metadata) if `Self`
-        /// implements `T` trait and panics if it doesn't.
-        fn new() -> <T as Pointee>::Metadata {
-            match Self::try_new() {
-                Some(it) => it,
-                None => panic!(
-                    "{} not implemented for {}",
-                    type_name::<T>(),
-                    type_name::<Self>()
-                ),
-            }
-        }
-    }
-    impl<S, T: ?Sized> TryMetadata<T> for S {
-        default fn try_new() -> Option<<T as Pointee>::Metadata> {
-            None
-        }
-    }
-    impl<S, T: ?Sized> TryMetadata<T> for S
-    where
-        S: Unsize<T>,
-    {
-        fn try_new() -> Option<<T as Pointee>::Metadata> {
-            Some(static_metadata::<S, T>())
-        }
-    }
-
     /// Allows dynamically dropping arbitrary types.
     ///
     /// This is a workaround for invoking [`Drop::drop`] as well as calling
     /// compiler generated drop glue dynamically.
-    pub trait HandleDrop {
+    pub(crate) trait HandleDrop {
         fn do_drop(&mut self);
     }
     impl<T: ?Sized> HandleDrop for T {
@@ -166,4 +132,4 @@ pub mod pointer {
     }
 }
 #[cfg(feature = "ptr_metadata")]
-pub use pointer::*;
+pub(crate) use pointer::*;

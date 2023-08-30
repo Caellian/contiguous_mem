@@ -101,7 +101,6 @@ impl MemoryImpl for ImplConcurrent {
 
     const USE_LOCKS: bool = true;
 
-    #[inline(always)]
     fn build_state(
         base: *mut u8,
         capacity: usize,
@@ -117,12 +116,10 @@ impl MemoryImpl for ImplConcurrent {
         }))
     }
 
-    #[inline(always)]
     fn deref_state(state: &Self::State) -> &ContiguousMemoryState<Self> {
         &state
     }
 
-    #[inline(always)]
     fn get_base(state: &Self::State) -> Self::LockResult<*mut u8> {
         state
             .base
@@ -130,12 +127,10 @@ impl MemoryImpl for ImplConcurrent {
             .map(|result| *result)
     }
 
-    #[inline(always)]
     fn get_capacity(base: &Self::State) -> usize {
         base.size.load(portable_atomic::Ordering::AcqRel)
     }
 
-    #[inline(always)]
     fn resize(
         state: &mut Self::State,
         new_capacity: usize,
@@ -149,7 +144,6 @@ impl MemoryImpl for ImplConcurrent {
         Ok(*lock)
     }
 
-    #[inline(always)]
     fn deallocate(base: &Self::Base, layout: Layout) {
         if let Ok(mut lock) = base.lock_named(MutexKind::BaseAddress) {
             unsafe { allocator::dealloc(*lock, layout) };
@@ -157,7 +151,6 @@ impl MemoryImpl for ImplConcurrent {
         }
     }
 
-    #[inline(always)]
     fn resize_tracker(
         state: &mut Self::State,
         new_capacity: usize,
@@ -167,13 +160,11 @@ impl MemoryImpl for ImplConcurrent {
         Ok(())
     }
 
-    #[inline(always)]
     fn shrink_tracker(state: &mut Self::State) -> Result<Option<usize>, LockingError> {
         let mut lock = state.tracker.lock_named(MutexKind::AllocationTracker)?;
         Ok(lock.shrink_to_fit())
     }
 
-    #[inline(always)]
     fn next_free(
         state: &mut Self::State,
         layout: Layout,
@@ -196,7 +187,6 @@ impl MemoryImpl for ImplDefault {
     type StoreResult<T> = ContiguousMemoryRef<T>;
     type LockResult<T> = T;
 
-    #[inline(always)]
     fn build_state(
         base: *mut u8,
         capacity: usize,
@@ -212,22 +202,18 @@ impl MemoryImpl for ImplDefault {
         }))
     }
 
-    #[inline(always)]
     fn deref_state(state: &Self::State) -> &ContiguousMemoryState<Self> {
         &state
     }
 
-    #[inline(always)]
     fn get_base(state: &Self::State) -> Self::LockResult<*mut u8> {
         state.base.get()
     }
 
-    #[inline(always)]
     fn get_capacity(base: &Self::State) -> usize {
         base.size.get()
     }
 
-    #[inline(always)]
     fn resize(
         state: &mut Self::State,
         new_capacity: usize,
@@ -239,13 +225,11 @@ impl MemoryImpl for ImplDefault {
         Ok(value)
     }
 
-    #[inline(always)]
     fn deallocate(base: &Self::Base, layout: Layout) {
         unsafe { allocator::dealloc(base.get(), layout) };
         base.set(null_mut())
     }
 
-    #[inline(always)]
     fn resize_tracker(
         state: &mut Self::State,
         new_capacity: usize,
@@ -253,12 +237,10 @@ impl MemoryImpl for ImplDefault {
         state.tracker.borrow_mut().resize(new_capacity)
     }
 
-    #[inline(always)]
     fn shrink_tracker(state: &mut Self::State) -> Result<Option<usize>, LockingError> {
         Ok(state.tracker.borrow_mut().shrink_to_fit())
     }
 
-    #[inline(always)]
     fn next_free(
         state: &mut Self::State,
         layout: Layout,
@@ -285,7 +267,6 @@ impl MemoryImpl for ImplFixed {
     type StoreResult<T> = Result<*mut T, ContiguousMemoryError>;
     type LockResult<T> = T;
 
-    #[inline(always)]
     fn build_state(
         base: *mut u8,
         capacity: usize,
@@ -300,22 +281,18 @@ impl MemoryImpl for ImplFixed {
         })
     }
 
-    #[inline(always)]
     fn deref_state(state: &Self::State) -> &ContiguousMemoryState<Self> {
         &state
     }
 
-    #[inline(always)]
     fn get_base(state: &Self::State) -> Self::LockResult<*mut u8> {
         state.base
     }
 
-    #[inline(always)]
     fn get_capacity(base: &Self::State) -> usize {
         base.size
     }
 
-    #[inline(always)]
     fn resize(
         _state: &mut Self::State,
         _new_capacity: usize,
@@ -323,14 +300,12 @@ impl MemoryImpl for ImplFixed {
         unimplemented!("can't reallocate ContiguousMemory with ImplFixed");
     }
 
-    #[inline(always)]
     fn deallocate(base: &Self::Base, layout: Layout) {
         unsafe {
             allocator::dealloc(*base, layout);
         }
     }
 
-    #[inline(always)]
     fn resize_tracker(
         _state: &mut Self::State,
         _new_capacity: usize,
@@ -338,12 +313,10 @@ impl MemoryImpl for ImplFixed {
         Err(ContiguousMemoryError::NoStorageLeft)
     }
 
-    #[inline(always)]
     fn shrink_tracker(state: &mut Self::State) -> Result<Option<usize>, LockingError> {
         Ok(state.tracker.shrink_to_fit())
     }
 
-    #[inline(always)]
     fn next_free(
         state: &mut Self::State,
         layout: Layout,
@@ -379,7 +352,6 @@ pub trait ReferenceImpl: Sized {
     ) -> Self::Type<T>;
 
     /// Marks reference state as no longer being borrowed.
-    #[inline(always)]
     fn unborrow_ref<T: ?Sized>(_state: &Self::RefState<T>) {}
 
     unsafe fn cast<T, R>(from: Self::Type<T>) -> Self::Type<R>;
@@ -392,7 +364,6 @@ impl ReferenceImpl for ImplConcurrent {
     type RefMutGuard<'a> = MutexGuard<'a, ()>;
     type Type<T> = SyncContiguousMemoryRef<T>;
 
-    #[inline(always)]
     fn free_region(state: &mut <Self as MemoryImpl>::State, range: ByteRange) -> Option<*mut ()> {
         if let Ok(mut lock) = state.tracker.lock_named(MutexKind::AllocationTracker) {
             let _ = lock.release(range);
@@ -407,7 +378,6 @@ impl ReferenceImpl for ImplConcurrent {
         }
     }
 
-    #[inline(always)]
     fn build_ref<T: StoreRequirements>(
         state: &<Self as MemoryImpl>::State,
         _addr: *mut T,
@@ -419,7 +389,7 @@ impl ReferenceImpl for ImplConcurrent {
                 range: range.clone(),
                 already_borrowed: Mutex::new(()),
                 #[cfg(feature = "ptr_metadata")]
-                drop_metadata: <T as TryMetadata<dyn HandleDrop>>::new(),
+                drop_metadata: static_metadata::<T, dyn HandleDrop>(),
                 _phantom: PhantomData,
             }),
             #[cfg(feature = "ptr_metadata")]
@@ -429,7 +399,6 @@ impl ReferenceImpl for ImplConcurrent {
         }
     }
 
-    #[inline(always)]
     unsafe fn cast<T, R>(from: Self::Type<T>) -> Self::Type<R> {
         SyncContiguousMemoryRef {
             inner: core::mem::transmute(from.inner),
@@ -448,7 +417,6 @@ impl ReferenceImpl for ImplDefault {
     type RefMutLock = Cell<bool>;
     type Type<T> = ContiguousMemoryRef<T>;
 
-    #[inline(always)]
     fn free_region(state: &mut <Self as MemoryImpl>::State, range: ByteRange) -> Option<*mut ()> {
         if let Ok(mut tracker) = state.tracker.try_borrow_mut() {
             let _ = tracker.release(range);
@@ -460,7 +428,6 @@ impl ReferenceImpl for ImplDefault {
         }
     }
 
-    #[inline(always)]
     fn build_ref<T: StoreRequirements>(
         state: &<Self as MemoryImpl>::State,
         _addr: *mut T,
@@ -472,7 +439,7 @@ impl ReferenceImpl for ImplDefault {
                 range: range.clone(),
                 already_borrowed: Cell::new(false),
                 #[cfg(feature = "ptr_metadata")]
-                drop_metadata: <T as TryMetadata<dyn HandleDrop>>::new(),
+                drop_metadata: static_metadata::<T, dyn HandleDrop>(),
                 _phantom: PhantomData,
             }),
             #[cfg(feature = "ptr_metadata")]
@@ -482,12 +449,10 @@ impl ReferenceImpl for ImplDefault {
         }
     }
 
-    #[inline(always)]
     fn unborrow_ref<T: ?Sized>(state: &Self::RefState<T>) {
         state.already_borrowed.set(false)
     }
 
-    #[inline(always)]
     unsafe fn cast<T, R>(from: Self::Type<T>) -> Self::Type<R> {
         ContiguousMemoryRef {
             inner: core::mem::transmute(from.inner),
@@ -506,14 +471,12 @@ impl ReferenceImpl for ImplFixed {
     type RefMutGuard<'a> = ();
     type Type<T> = *mut T;
 
-    #[inline(always)]
     fn free_region(state: &mut <Self as MemoryImpl>::State, range: ByteRange) -> Option<*mut ()> {
         let _ = state.tracker.release(range);
 
         unsafe { Some(state.base.add(range.0) as *mut ()) }
     }
 
-    #[inline(always)]
     fn build_ref<T>(
         _base: &<Self as MemoryImpl>::State,
         addr: *mut T,
@@ -522,7 +485,6 @@ impl ReferenceImpl for ImplFixed {
         addr
     }
 
-    #[inline(always)]
     unsafe fn cast<T, R>(from: Self::Type<T>) -> Self::Type<R> {
         from as *mut R
     }

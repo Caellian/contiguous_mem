@@ -6,13 +6,7 @@ description = "A contiguous memory storage"
 authors = ["Tin Švagelj <tin.svagelj@live.com>"]
 license = "MIT OR Apache-2.0 OR Zlib"
 keywords = ["memory", "contiguous", "storage", "container", "nostd"]
-categories = [
-    "data-structures",
-    "memory-management",
-    "game-engines",
-    "game-development",
-    "no-std",
-]
+categories = ["data-structures", "memory-management", "no-std"]
 repository = "https://github.com/Caellian/contiguous_mem"
 
 [[example]]
@@ -25,7 +19,7 @@ portable-atomic = { version = "1", default-features = false }
 spin = { version = "0.9", optional = true }
 
 [features]
-default = ["std", "leak_data"]
+default = ["std", "ptr_metadata"]
 std = ["portable-atomic/std"]
 no_std = ["dep:spin"]
 debug = []

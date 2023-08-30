@@ -27,9 +27,6 @@ use details::*;
 use range::ByteRange;
 use types::*;
 
-#[cfg(feature = "ptr_metadata")]
-pub use types::pointer as ptr_metadata_ext;
-
 use core::{
     alloc::{Layout, LayoutError},
     marker::PhantomData,
@@ -528,14 +525,14 @@ impl<T: ?Sized> SyncContiguousMemoryRef<T> {
     }
 
     #[cfg(feature = "ptr_metadata")]
-    pub fn as_dyn<R: ?Sized>(self, metadata: <R as Pointee>::Metadata) -> SyncContiguousMemoryRef<R>
+    pub fn into_dyn<R: ?Sized>(self) -> SyncContiguousMemoryRef<R>
     where
-        T: Unsize<R>,
+        T: Sized + Unsize<R>,
     {
         unsafe {
             SyncContiguousMemoryRef {
                 inner: core::mem::transmute(self.inner),
-                metadata,
+                metadata: static_metadata::<T, R>(),
             }
         }
     }
@@ -641,14 +638,14 @@ impl<T: ?Sized> ContiguousMemoryRef<T> {
     }
 
     #[cfg(feature = "ptr_metadata")]
-    pub fn as_dyn<R: ?Sized>(self, metadata: <R as Pointee>::Metadata) -> ContiguousMemoryRef<R>
+    pub fn into_dyn<R: ?Sized>(self) -> ContiguousMemoryRef<R>
     where
-        T: Unsize<R>,
+        T: Sized + Unsize<R>,
     {
         unsafe {
             ContiguousMemoryRef {
                 inner: core::mem::transmute(self.inner),
-                metadata,
+                metadata: static_metadata::<T, R>(),
             }
         }
     }
