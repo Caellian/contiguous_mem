@@ -59,6 +59,117 @@
             },
             "args": [],
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'default_impl'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=default_impl",
+                    "--package=contiguous-mem"
+                ],
+                "filter": {
+                    "name": "default_impl",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'default_impl'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=default_impl",
+                    "--package=contiguous-mem"
+                ],
+                "filter": {
+                    "name": "default_impl",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'sync_impl'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=sync_impl",
+                    "--package=contiguous-mem"
+                ],
+                "filter": {
+                    "name": "sync_impl",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'sync_impl'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=sync_impl",
+                    "--package=contiguous-mem"
+                ],
+                "filter": {
+                    "name": "sync_impl",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'unsafe_impl'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=unsafe_impl",
+                    "--package=contiguous-mem"
+                ],
+                "filter": {
+                    "name": "unsafe_impl",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'unsafe_impl'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=unsafe_impl",
+                    "--package=contiguous-mem"
+                ],
+                "filter": {
+                    "name": "unsafe_impl",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

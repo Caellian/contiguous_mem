@@ -24,5 +24,7 @@ jobs:
         run: cargo build --verbose --features ptr_metadata
       - name: Build restrictive
         run: cargo build --verbose --no-default-features --features std
+      - name: Build all features
+        run: cargo build --verbose --all-features
       - name: Run tests
         run: cargo test --verbose --features ptr_metadata

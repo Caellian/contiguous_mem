@@ -1,8 +1,8 @@
-//! Module housing [`AllocationTracker`].
+#![doc(hidden)]
 
 use core::alloc::Layout;
 
-#[cfg(any(feature = "no_std"))]
+#[cfg(any(not(feature = "std")))]
 use crate::types::*;
 use crate::{error::ContiguousMemoryError, range::ByteRange};
 
@@ -45,23 +45,9 @@ impl AllocationTracker {
     }
 
     /// Tries resizing the available memory range represented by this structure
-    /// to the provided `new_size`.
-    ///
-    /// # Arguments
-    ///
-    /// * `new_size` - The desired new size of the memory region.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success or a `ContiguousMemoryError` if an error
-    /// occurs.
-    ///
-    /// # Errors
-    ///
-    /// This function can return the following errors:
-    ///
-    /// - [`ContiguousMemoryError::Unshrinkable`]: If the remaining free regions
-    ///   cannot be shrunk to the desired size.
+    /// to provided `new_size`, or an [`ContiguousMemoryError::Unshrinkable`]
+    /// error if the represented memory range cannot be shrunk enough to fit
+    /// the desired size.
     pub fn resize(&mut self, new_size: usize) -> Result<(), ContiguousMemoryError> {
         if new_size == self.size {
             return Ok(());
@@ -121,19 +107,10 @@ impl AllocationTracker {
     }
 
     /// Returns the next free memory region that can accommodate the given type
-    /// [`Layout`].
+    /// `layout`.
     ///
     /// If the `layout` cannot be safely stored within any free segments of the
-    /// represented memory region, `None` is returned.
-    ///
-    /// # Arguments
-    ///
-    /// * `layout` - The layout of the data to be stored.
-    ///
-    /// # Returns
-    ///
-    /// An optional [`ByteRange`] representing the next available memory region,
-    /// or `None` if no suitable region is found.
+    /// represented memory region, `None` is returned instead.
     pub fn peek_next(&self, layout: Layout) -> Option<ByteRange> {
         if layout.size() > self.size {
             return None;
@@ -148,20 +125,8 @@ impl AllocationTracker {
         Some(usable)
     }
 
-    /// Tries marking the provided memory region as not free.
-    ///
-    /// # Arguments
-    ///
-    /// * `region` - The memory region to mark as not free.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success or a `ContiguousMemoryError` if an error
-    /// occurs.
-    ///
-    /// # Errors
-    ///
-    /// This function can return the following errors:
+    /// Tries marking the provided memory `region` as not free, returning one
+    /// of the following errors if that's not possible:
     ///
     /// - [`ContiguousMemoryError::NotContained`]: If the provided region falls
     ///   outside of the memory tracked by the `AllocationTracker`.
@@ -199,23 +164,8 @@ impl AllocationTracker {
     /// `layout`.
     ///
     /// On success, it returns a [`ByteRange`] of the memory region that was
-    /// taken.
-    ///
-    /// # Arguments
-    ///
-    /// * `layout` - The layout of the data to be stored.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success with the allocated [`ByteRange`] or a
-    /// `ContiguousMemoryError` if an error occurs.
-    ///
-    /// # Errors
-    ///
-    /// This function can return the following errors:
-    ///
-    /// - [`ContiguousMemoryError::NoStorageLeft`]: If the requested [`Layout`]
-    ///   cannot be fitted within any free memory regions.
+    /// taken, or a [`ContiguousMemoryError::NoStorageLeft`] error if the
+    /// requested `layout` cannot be placed within any free regions.
     pub fn take_next(&mut self, layout: Layout) -> Result<ByteRange, ContiguousMemoryError> {
         if layout.size() > self.size {
             return Err(ContiguousMemoryError::NoStorageLeft);
@@ -251,23 +201,9 @@ impl AllocationTracker {
         Ok(taken)
     }
 
-    /// Tries marking the provided memory region as free.
-    ///
-    /// # Arguments
-    ///
-    /// * `region` - The memory region to mark as free.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success or a `ContiguousMemoryError` if an error
-    /// occurs.
-    ///
-    /// # Errors
-    ///
-    /// This function can return the following error:
-    ///
-    /// - [`ContiguousMemoryError::NotContained`]: If the provided region falls
-    ///   outside of the memory tracked by the `AllocationTracker`.
+    /// Tries marking the provided memory `region` as free, returning a
+    /// [`ContiguousMemoryError::NotContained`] error if the provided region
+    /// falls outside of the memory tracked by the `AllocationTracker`.
     pub fn release(&mut self, region: ByteRange) -> Result<(), ContiguousMemoryError> {
         if !self.whole_range().contains(region) {
             return Err(ContiguousMemoryError::NotContained);

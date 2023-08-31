@@ -1,6 +1,6 @@
 //! Errors produced by the crate.
 
-#[cfg(all(feature = "error_in_core", not(feature = "std")))]
+#[cfg(all(feature = "error_in_core"))]
 use core::error::Error;
 #[cfg(all(not(feature = "error_in_core"), feature = "std"))]
 use std::error::Error;
@@ -17,13 +17,14 @@ use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use crate::range::ByteRange;
 
-/// Error returned when [`Mutex`](crate::types::Mutex) isn't lockable.
+/// Error returned when a [`Mutex`](crate::types::Mutex) or a
+/// [`RwLock`](crate::types::RwLock) isn't lockable.
 #[derive(Debug)]
 pub enum LockingError {
-    /// Not lockable because Mutex was poisoned.
+    /// Not lockable because the mutex/lock was poisoned.
     Poisoned {
-        /// Specifies which component was poisoned.
-        which: MutexKind,
+        /// Specifies source of poisoning.
+        source: LockSource,
     },
     /// Not lockable because the lock would be blocking.
     WouldBlock,
@@ -33,15 +34,15 @@ pub enum LockingError {
 impl Display for LockingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            LockingError::Poisoned { which } => match which {
-                MutexKind::BaseAddress => {
+            LockingError::Poisoned { source: which } => match which {
+                LockSource::BaseAddress => {
                     write!(f, "Cannot acquire lock: base address Mutex was poisoned")
                 }
-                MutexKind::AllocationTracker => write!(
+                LockSource::AllocationTracker => write!(
                     f,
                     "Cannot acquire lock: AllocationTracker Mutex was poisoned"
                 ),
-                MutexKind::Reference => write!(
+                LockSource::Reference => write!(
                     f,
                     "Cannot acquire lock: reference concurrent mutable access exclusion flag Mutex was poisoned"
                 )
@@ -62,7 +63,7 @@ impl Error for LockingError {
 impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
     fn from(_: PoisonError<MutexGuard<'_, *mut u8>>) -> Self {
         LockingError::Poisoned {
-            which: MutexKind::BaseAddress,
+            source: LockSource::BaseAddress,
         }
     }
 }
@@ -71,7 +72,7 @@ impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
 impl From<PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>> for LockingError {
     fn from(_: PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>) -> Self {
         LockingError::Poisoned {
-            which: MutexKind::AllocationTracker,
+            source: LockSource::AllocationTracker,
         }
     }
 }
@@ -89,16 +90,16 @@ where
     }
 }
 
-/// Error returned when multiple concurrent mutable access' are attempted to
-/// the same memory region.
+/// Error returned when concurrent mutable access is attempted to the same
+/// memory region.
 #[derive(Debug)]
-pub struct MutablyBorrowed {
+pub struct RegionBorrowed {
     /// [`ByteRange`] that was attempted to be borrowed.
     pub range: ByteRange,
 }
 
 #[cfg(any(feature = "std", feature = "error_in_core"))]
-impl Display for MutablyBorrowed {
+impl Display for RegionBorrowed {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
@@ -109,15 +110,16 @@ impl Display for MutablyBorrowed {
 }
 
 #[cfg(any(feature = "std", feature = "error_in_core"))]
-impl Error for MutablyBorrowed {
+impl Error for RegionBorrowed {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
     }
 }
 
 /// Represents errors that can occur while using the
-/// [`ContiguousMemory`](crate::ContiguousMemory) container.
+/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage) container.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ContiguousMemoryError {
     /// Tried to store data that does not fit into any of the remaining free
     /// memory regions.
@@ -132,8 +134,7 @@ pub enum ContiguousMemoryError {
     /// The [`AllocationTracker`](crate::tracker::AllocationTracker) does not
     /// allow shrinking to the expected size.
     Unshrinkable {
-        /// The minimum required size for shrinking the
-        /// [`ContiguousMemory`](crate::ContiguousMemory) container.
+        /// The minimum required size to house currently stored data.
         required_size: usize,
     },
     /// Indicates that a mutex wasn't lockable.
@@ -142,26 +143,27 @@ pub enum ContiguousMemoryError {
     /// [`AllocationTracker`](crate::tracker::AllocationTracker) which is
     /// already in use.
     TrackerInUse,
-    /// Indicates that the provided [`Layout`](std::alloc::Layout) is invalid.
+    /// Indicates that the provided [`Layout`](core::alloc::Layout) is invalid.
     Layout(
-        /// The underlying error that caused the [`Layout`](std::alloc::Layout)
+        /// The underlying error that caused the [`Layout`](core::alloc::Layout)
         /// to be considered invalid.
         LayoutError,
     ),
     /// Tried mutably borrowing already borrowed region of memory
-    BorrowMut(MutablyBorrowed),
+    BorrowMut(RegionBorrowed),
 }
 
-/// Represents possible poisoning sources for mutexes in [`LockingError`].
+/// Represents possible poisoning sources for mutexes and locks.
 #[derive(Debug, Clone, Copy)]
-pub enum MutexKind {
+#[non_exhaustive]
+pub enum LockSource {
     /// Mutex containing the base memory offset was poisoned.
     BaseAddress,
     /// [`AllocationTracker`](crate::tracker::AllocationTracker) mutex was
     /// poisoned.
     AllocationTracker,
-    /// Concurrent mutable access exclusion flag mutex in
-    /// [`ReferenceState`](crate::ReferenceState) was poisoned.
+    /// Concurrent mutable access exclusion flag in
+    /// [`ReferenceState`](crate::refs) was poisoned.
     Reference,
 }
 

@@ -15,13 +15,13 @@ path = "examples/ptr_metadata.rs"
 required-features = ["ptr_metadata"]
 
 [dependencies]
-portable-atomic = { version = "1", default-features = false }
+portable-atomic = { version = "1", default-features = false, optional = true }
 spin = { version = "0.9", optional = true }
 
 [features]
-default = ["std", "ptr_metadata"]
-std = ["portable-atomic/std"]
-no_std = ["dep:spin"]
+default = ["std", "leak_data"]
+std = []
+no_std = ["dep:portable-atomic", "dep:spin"]
 debug = []
 leak_data = []
 ptr_metadata = []

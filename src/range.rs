@@ -1,10 +1,10 @@
-//! Module housing [`ByteRange`].
+#![doc(hidden)]
 
 use core::fmt::Display;
 
 /// Represents a range of bytes in
 /// [`AllocationTracker`](crate::tracker::AllocationTracker) and
-/// [`ContiguousMemory`](crate::ContiguousMemory).
+/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteRange(
     /// **Inclusive** lower bound of this byte range.
