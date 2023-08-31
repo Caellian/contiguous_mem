@@ -30,7 +30,7 @@ fn main() {
     let dog: ContiguousMemoryRef<dyn Greetable> =
         storage.store(Dog("Rover".to_string())).into_dyn();
 
-    person1.print_hello();
-    person2.print_hello();
-    dog.print_hello();
+    person1.get().print_hello();
+    person2.get().print_hello();
+    dog.get().print_hello();
 }
