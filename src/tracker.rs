@@ -3,23 +3,19 @@
 use core::alloc::Layout;
 
 #[cfg(any(not(feature = "std")))]
-use crate::types::*;
+use crate::types::Vec;
 use crate::{error::ContiguousMemoryError, range::ByteRange};
 
 /// A structure that keeps track of unused regions of memory within provided
 /// bounds.
 #[derive(Clone)]
-#[cfg_attr(feature = "debug", derive(Debug))]
 pub struct AllocationTracker {
     size: usize,
     unused: Vec<ByteRange>,
 }
+
 impl AllocationTracker {
     /// Constructs a new `AllocationTracker` of the provided `size`.
-    ///
-    /// # Arguments
-    ///
-    /// * `size` - The total size of the memory region that will be tracked.
     pub fn new(size: usize) -> Self {
         let mut initial = Vec::new();
         initial.push(ByteRange(0, size));
@@ -227,6 +223,16 @@ impl AllocationTracker {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(feature = "debug")]
+impl core::fmt::Debug for AllocationTracker {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AllocationTracker")
+            .field("size", &self.size)
+            .field("unused", &self.unused)
+            .finish()
     }
 }
 

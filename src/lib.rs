@@ -347,7 +347,10 @@ impl ContiguousMemoryStorage<ImplUnsafe> {
 }
 
 #[cfg(feature = "debug")]
-impl<Impl: ImplDetails = ImplDefault> core::fmt::Debug for ContiguousMemoryStorage<Impl> {
+impl<Impl: ImplDetails> core::fmt::Debug for ContiguousMemoryStorage<Impl>
+where
+    Impl::StorageState: core::fmt::Debug,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ContiguousMemoryStorage")
             .field("inner", &self.inner)
