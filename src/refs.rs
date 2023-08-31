@@ -13,7 +13,7 @@ use core::{
 
 use crate::{
     details::{ImplConcurrent, ImplDefault, ImplDetails, StorageDetails},
-    error::{LockSource, LockingError, RegionBorrowed},
+    error::{LockSource, LockingError, RegionBorrowedError},
     range::ByteRange,
     types::*,
 };
@@ -22,6 +22,9 @@ use crate::{
 pub trait ContiguousMemoryReference<T: ?Sized, Impl: ImplDetails> {
     /// Error type returned when the data represented by the reference can't be
     /// safely accessed/borrowed.
+    ///
+    /// - For concurrent implementation it's [`LockingError`].
+    /// - For default implementation it's [`RegionBorrowedError`]
     type BorrowError;
 
     /// Returns a byte range within container memory this reference points to.
@@ -59,6 +62,11 @@ pub trait ContiguousMemoryReference<T: ?Sized, Impl: ImplDetails> {
     fn into_dyn<R: ?Sized>(self) -> Impl::ReferenceType<R>
     where
         T: Sized + Unsize<R>;
+
+    /// Tries downcasting this dynamic reference into a discrete type `R`,
+    /// returns None if `R` drop handler doesn't match the original one.
+    #[cfg(feature = "ptr_metadata")]
+    fn downcast_dyn<R: Unsize<T>>(self) -> Option<Impl::ReferenceType<R>>;
 }
 
 /// A synchronized (thread-safe) reference to `T` data stored in a
@@ -209,6 +217,19 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
             }
         }
     }
+
+    #[cfg(feature = "ptr_metadata")]
+    fn downcast_dyn<R: Unsize<T>>(self) -> Option<SyncContiguousMemoryRef<R>> {
+        if self.inner.drop_metadata != static_metadata::<R, dyn HandleDrop>() {
+            return None;
+        }
+        unsafe {
+            Some(SyncContiguousMemoryRef {
+                inner: core::mem::transmute(self.inner),
+                metadata: (),
+            })
+        }
+    }
 }
 
 impl<T: ?Sized> Clone for SyncContiguousMemoryRef<T> {
@@ -245,7 +266,7 @@ pub struct ContiguousMemoryRef<T: ?Sized> {
 pub type CMRef<T> = ContiguousMemoryRef<T>;
 
 impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRef<T> {
-    type BorrowError = RegionBorrowed;
+    type BorrowError = RegionBorrowedError;
 
     fn range(&self) -> ByteRange {
         self.inner.range
@@ -258,7 +279,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRe
         ContiguousMemoryRef::<T>::try_get(self).expect("mutably borrowed")
     }
 
-    fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplDefault>, RegionBorrowed>
+    fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplDefault>, RegionBorrowedError>
     where
         T: RefSizeReq,
     {
@@ -266,7 +287,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRe
         if let BorrowState::Read(count) = state {
             self.inner.borrow_kind.set(BorrowState::Read(count + 1));
         } else {
-            return Err(RegionBorrowed {
+            return Err(RegionBorrowedError {
                 range: self.inner.range,
             });
         }
@@ -293,14 +314,16 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRe
         ContiguousMemoryRef::<T>::try_get_mut(self).expect("mutably borrowed")
     }
 
-    /// This implementation returns a [`RegionBorrowed`] error if the
+    /// This implementation returns a [`RegionBorrowedError`] error if the
     /// represented memory region is already borrowed.
-    fn try_get_mut<'a>(&'a mut self) -> Result<MemoryWriteGuard<'a, T, ImplDefault>, RegionBorrowed>
+    fn try_get_mut<'a>(
+        &'a mut self,
+    ) -> Result<MemoryWriteGuard<'a, T, ImplDefault>, RegionBorrowedError>
     where
         T: RefSizeReq,
     {
         if self.inner.borrow_kind.get() != BorrowState::Read(0) {
-            return Err(RegionBorrowed {
+            return Err(RegionBorrowedError {
                 range: self.inner.range,
             });
         } else {
@@ -332,6 +355,19 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRe
                 inner: core::mem::transmute(self.inner),
                 metadata: static_metadata::<T, R>(),
             }
+        }
+    }
+
+    #[cfg(feature = "ptr_metadata")]
+    fn downcast_dyn<R: Unsize<T>>(self) -> Option<ContiguousMemoryRef<R>> {
+        if self.inner.drop_metadata != static_metadata::<R, dyn HandleDrop>() {
+            return None;
+        }
+        unsafe {
+            Some(ContiguousMemoryRef {
+                inner: core::mem::transmute(self.inner),
+                metadata: (),
+            })
         }
     }
 }

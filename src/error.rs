@@ -93,13 +93,19 @@ where
 /// Error returned when concurrent mutable access is attempted to the same
 /// memory region.
 #[derive(Debug)]
-pub struct RegionBorrowed {
+pub struct RegionBorrowedError {
     /// [`ByteRange`] that was attempted to be borrowed.
     pub range: ByteRange,
 }
 
+#[deprecated(
+    since = "0.3.1",
+    note = "Renamed; use RegionBorrowedError"
+)]
+pub use RegionBorrowedError as RegionBorrowed;
+
 #[cfg(any(feature = "std", feature = "error_in_core"))]
-impl Display for RegionBorrowed {
+impl Display for RegionBorrowedError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
@@ -110,7 +116,7 @@ impl Display for RegionBorrowed {
 }
 
 #[cfg(any(feature = "std", feature = "error_in_core"))]
-impl Error for RegionBorrowed {
+impl Error for RegionBorrowedError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
     }
@@ -150,7 +156,7 @@ pub enum ContiguousMemoryError {
         LayoutError,
     ),
     /// Tried mutably borrowing already borrowed region of memory
-    BorrowMut(RegionBorrowed),
+    BorrowMut(RegionBorrowedError),
 }
 
 /// Represents possible poisoning sources for mutexes and locks.

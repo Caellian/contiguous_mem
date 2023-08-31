@@ -2,7 +2,7 @@
 //!
 //! End-users aren't meant to interact with traits defined in this module
 //! directly and they exist solely to simplify implementation of
-//! [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage) by erasing
+//! [`ContiguousMemoryStorage`](ContiguousMemoryStorage) by erasing
 //! type details of different implementations.
 //!
 //! Any changes to these traits aren't considered a breaking change and won't
@@ -11,6 +11,7 @@
 use core::{
     alloc::{Layout, LayoutError},
     cell::{Cell, RefCell},
+    mem::size_of,
     ptr::null_mut,
 };
 
@@ -27,7 +28,7 @@ use crate::{
     refs::{sealed::*, ContiguousMemoryRef, SyncContiguousMemoryRef},
     tracker::AllocationTracker,
     types::*,
-    BaseLocation, ContiguousMemoryState,
+    BaseLocation, ContiguousMemoryState, ContiguousMemoryStorage,
 };
 
 /// Implementation details shared between [storage](StorageDetails) and
@@ -51,6 +52,8 @@ pub trait ImplBase: Sized {
 /// A marker struct representing the behavior specialization that does not
 /// require thread-safety. This implementation skips mutexes, making it faster
 /// but unsuitable for concurrent usage.
+///
+/// For example usage of default implementation see: [`ContiguousMemory`](crate::ContiguousMemory)
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplDefault;
@@ -64,6 +67,9 @@ impl ImplBase for ImplDefault {
 /// operations. This implementation ensures that the container's operations can
 /// be used safely in asynchronous contexts, utilizing mutexes to prevent data
 /// races.
+///
+/// For example usage of default implementation see:
+/// [`SyncContiguousMemory`](crate::SyncContiguousMemory)
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplConcurrent;
@@ -78,6 +84,9 @@ impl ImplBase for ImplConcurrent {
 /// A marker struct representing the behavior specialization for unsafe
 /// implementation. Should be used when the container is guaranteed to outlive
 /// any pointers to data contained in represented memory block.
+///
+/// For example usage of default implementation see:
+/// [`UnsafeContiguousMemory`](crate::UnsafeContiguousMemory)
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplUnsafe;
@@ -88,7 +97,7 @@ impl ImplBase for ImplUnsafe {
 }
 
 /// Implementation details of
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage).
+/// [`ContiguousMemoryStorage`](ContiguousMemoryStorage).
 pub trait StorageDetails: ImplBase {
     /// The type representing the base memory and allocation tracking.
     type Base;
@@ -426,7 +435,7 @@ pub trait ReferenceDetails: ImplBase {
     fn build_ref<T: StoreRequirements>(
         state: &Self::StorageState,
         addr: *mut T,
-        range: &ByteRange,
+        range: ByteRange,
     ) -> Self::ReferenceType<T>;
 
     /// Marks reference state as no longer being borrowed.
@@ -456,7 +465,7 @@ impl ReferenceDetails for ImplConcurrent {
     fn build_ref<T: StoreRequirements>(
         state: &Self::StorageState,
         _addr: *mut T,
-        range: &ByteRange,
+        range: ByteRange,
     ) -> Self::ReferenceType<T> {
         SyncContiguousMemoryRef {
             inner: Arc::new(ReferenceState {
@@ -495,7 +504,7 @@ impl ReferenceDetails for ImplDefault {
     fn build_ref<T: StoreRequirements>(
         state: &Self::StorageState,
         _addr: *mut T,
-        range: &ByteRange,
+        range: ByteRange,
     ) -> Self::ReferenceType<T> {
         ContiguousMemoryRef {
             inner: Rc::new(ReferenceState {
@@ -537,13 +546,208 @@ impl ReferenceDetails for ImplUnsafe {
     fn build_ref<T>(
         _base: &Self::StorageState,
         addr: *mut T,
-        _range: &ByteRange,
+        _range: ByteRange,
     ) -> Self::ReferenceType<T> {
         addr
     }
 }
 
+pub trait StoreDataDetails: StorageDetails {
+    unsafe fn store_data<T: StoreRequirements>(
+        state: &mut Self::StorageState,
+        data: *mut T,
+        layout: Layout,
+    ) -> Self::StoreResult<T>;
+
+    fn assume_stored<T: StoreRequirements>(
+        state: &Self::StorageState,
+        position: usize,
+    ) -> Self::LockResult<Self::ReferenceType<T>>;
+}
+
+impl StoreDataDetails for ImplConcurrent {
+    unsafe fn store_data<T: StoreRequirements>(
+        state: &mut Self::StorageState,
+        data: *mut T,
+        layout: Layout,
+    ) -> Result<SyncContiguousMemoryRef<T>, LockingError> {
+        let (addr, range) = loop {
+            match ImplConcurrent::store_next(state, layout) {
+                Ok(taken) => {
+                    let found = (taken.0
+                        + ImplConcurrent::get_base(&ImplConcurrent::deref_state(state).base)?
+                            as usize) as *mut u8;
+                    unsafe { core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size()) }
+                    break (found, taken);
+                }
+                Err(ContiguousMemoryError::NoStorageLeft) => {
+                    match ImplConcurrent::resize_container(state, ImplConcurrent::get_capacity(&ImplConcurrent::deref_state(state).capacity) * 2) {
+                        Ok(_) => {}
+                        Err(ContiguousMemoryError::Lock(locking_err)) => return Err(locking_err),
+                        Err(other) => unreachable!(
+                            "reached unexpected error while growing the container to store data: {:?}",
+                            other
+                        ),
+                    };
+                }
+                Err(ContiguousMemoryError::Lock(locking_err)) => return Err(locking_err),
+                Err(other) => unreachable!(
+                    "reached unexpected error while looking for next region to store data: {:?}",
+                    other
+                ),
+            }
+        };
+
+        Ok(ImplConcurrent::build_ref(state, addr as *mut T, range))
+    }
+
+    fn assume_stored<T: StoreRequirements>(
+        state: &Self::StorageState,
+        position: usize,
+    ) -> Result<SyncContiguousMemoryRef<T>, LockingError> {
+        let addr = unsafe {
+            ImplConcurrent::get_base(&ImplConcurrent::deref_state(state).base)?.add(position)
+        };
+        Ok(ImplConcurrent::build_ref(
+            state,
+            addr as *mut T,
+            ByteRange(position, size_of::<T>()),
+        ))
+    }
+}
+
+impl StoreDataDetails for ImplDefault {
+    unsafe fn store_data<T: StoreRequirements>(
+        state: &mut Self::StorageState,
+        data: *mut T,
+        layout: Layout,
+    ) -> ContiguousMemoryRef<T> {
+        let (addr, range) = loop {
+            match ImplDefault::store_next(state, layout) {
+                Ok(taken) => {
+                    let found = (taken.0
+                        + ImplDefault::get_base(&ImplDefault::deref_state(state).base) as usize)
+                        as *mut u8;
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
+                    }
+                    break (found, taken);
+                }
+                Err(ContiguousMemoryError::NoStorageLeft) => {
+                    match ImplDefault::resize_container(state, ImplDefault::get_capacity(&ImplDefault::deref_state(state).capacity) * 2) {
+                        Ok(_) => {},
+                        Err(err) => unreachable!(
+                            "reached unexpected error while growing the container to store data: {:?}",
+                            err
+                        ),
+                    }
+                }
+                Err(other) => unreachable!(
+                    "reached unexpected error while looking for next region to store data: {:?}",
+                    other
+                ),
+            }
+        };
+
+        ImplDefault::build_ref(state, addr as *mut T, range)
+    }
+
+    fn assume_stored<T: StoreRequirements>(
+        state: &Self::StorageState,
+        position: usize,
+    ) -> ContiguousMemoryRef<T> {
+        let addr =
+            unsafe { ImplDefault::get_base(&ImplDefault::deref_state(state).base).add(position) };
+        ImplDefault::build_ref(state, addr as *mut T, ByteRange(position, size_of::<T>()))
+    }
+}
+
+impl StoreDataDetails for ImplUnsafe {
+    /// Returns a raw pointer (`*mut T`) to the stored value or
+    unsafe fn store_data<T: StoreRequirements>(
+        state: &mut Self::StorageState,
+        data: *mut T,
+        layout: Layout,
+    ) -> Result<*mut T, ContiguousMemoryError> {
+        let (addr, range) = loop {
+            match ImplUnsafe::store_next(state, layout) {
+                Ok(taken) => {
+                    let found = (taken.0
+                        + ImplUnsafe::get_base(&ImplUnsafe::deref_state(state).base) as usize)
+                        as *mut u8;
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
+                    }
+                    break (found, taken);
+                }
+                Err(other) => return Err(other),
+            }
+        };
+
+        Ok(ImplUnsafe::build_ref(state, addr as *mut T, range))
+    }
+
+    fn assume_stored<T: StoreRequirements>(state: &Self::StorageState, position: usize) -> *mut T {
+        let addr =
+            unsafe { ImplUnsafe::get_base(&ImplUnsafe::deref_state(state).base).add(position) };
+        ImplUnsafe::build_ref(
+            state,
+            addr as *mut T,
+            ByteRange(position, position + size_of::<T>()),
+        )
+    }
+}
+
+/// A deprecated trait for specializing store function across implementations.
+///
+/// These store functions are now available directly on ContiguousMemoryStorage
+/// and implemented in a sealed module.
+#[deprecated(
+    since = "0.3.1",
+    note = "Use methods available directly on ContiguousMemoryStorage"
+)]
+pub trait StoreData<Impl: ImplDetails> {
+    /// See [`ContiguousMemoryStorage::store_data`].
+    unsafe fn store_data<T: StoreRequirements>(
+        &mut self,
+        data: *mut T,
+        layout: Layout,
+    ) -> Impl::StoreResult<T>;
+
+    /// See [`ContiguousMemoryStorage::assume_stored`].
+    unsafe fn assume_stored<T: StoreRequirements>(
+        &self,
+        position: usize,
+    ) -> Impl::LockResult<Impl::ReferenceType<T>>;
+}
+
+#[allow(deprecated)]
+impl<Impl: ImplDetails> StoreData<Impl> for ContiguousMemoryStorage<Impl> {
+    unsafe fn store_data<T: StoreRequirements>(
+        &mut self,
+        data: *mut T,
+        layout: Layout,
+    ) -> Impl::StoreResult<T> {
+        Impl::store_data(&mut self.inner, data, layout)
+    }
+
+    unsafe fn assume_stored<T: StoreRequirements>(
+        &self,
+        position: usize,
+    ) -> Impl::LockResult<Impl::ReferenceType<T>> {
+        Impl::assume_stored(&self.inner, position)
+    }
+}
+
 /// Trait representing requirements for implementation details of the
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage).
-pub trait ImplDetails: ImplBase + StorageDetails + ReferenceDetails + DebugReq {}
-impl<Impl: ImplBase + StorageDetails + ReferenceDetails + DebugReq> ImplDetails for Impl {}
+/// [`ContiguousMemoryStorage`](ContiguousMemoryStorage).
+///
+/// This trait is implemented by:
+/// - [`ImplDefault`]
+/// - [`ImplConcurrent`]
+/// - [`ImplUnsafe`]
+///
+/// As none of the underlying traits can't be implemented, changes to this trait
+/// aren't considered breaking and won't affect semver.
+pub trait ImplDetails: ImplBase + StorageDetails + ReferenceDetails + StoreDataDetails {}
+impl<Impl: ImplBase + StorageDetails + ReferenceDetails + StoreDataDetails> ImplDetails for Impl {}

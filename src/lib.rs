@@ -29,7 +29,6 @@ mod types;
 use details::*;
 #[doc(inline)]
 pub use range::ByteRange;
-use refs::{ContiguousMemoryRef, SyncContiguousMemoryRef};
 use types::*;
 
 #[doc(inline)]
@@ -41,13 +40,13 @@ use core::{
     ops::Deref,
 };
 
-use error::{ContiguousMemoryError, LockingError};
+use error::ContiguousMemoryError;
 
 /// Re-exports commonly used types.
 pub mod prelude {
     pub use crate::{
         error::*, range::ByteRange, refs::*, ContiguousMemory, ContiguousMemoryStorage,
-        ImplConcurrent, ImplDefault, ImplDetails, ImplUnsafe, StoreData, SyncContiguousMemory,
+        ImplConcurrent, ImplDefault, ImplDetails, ImplUnsafe, SyncContiguousMemory,
         UnsafeContiguousMemory,
     };
 }
@@ -59,12 +58,12 @@ pub mod prelude {
 /// adjacently and ensuring they're properly alligned.
 ///
 /// Type argument `Impl` specifies implementation details for the behavior of
-/// this struct. This struct also implements [`StoreData`] for all of the
-/// details which specifies underlying logic for storing items.
+/// this struct.
 ///
 /// Note that this structure is a smart abstraction over underlying data,
-/// copying it creates a copy which represents the same internal state.
-#[cfg_attr(feature = "debug", derive(Debug))]
+/// copying it creates a copy which represents the same internal state. If you
+/// need to copy the memory region into a new container see:
+/// [`ContiguousMemoryStorage::copy_storage`]
 pub struct ContiguousMemoryStorage<Impl: ImplDetails = ImplDefault> {
     inner: Impl::StorageState,
 }
@@ -87,13 +86,21 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         })
     }
 
+    /// Creates a new `ContiguousMemory` instance with the provided `layout`.
+    pub fn new_from_layout(layout: Layout) -> Result<Self, LayoutError> {
+        let base = unsafe { allocator::alloc(layout) };
+        Ok(ContiguousMemoryStorage {
+            inner: Impl::build_state(base, layout.size(), layout.align())?,
+        })
+    }
+
     /// Returns the base address (`*mut u8`) of the allocated memory.
     ///
     /// # Errors
     ///
     /// For [concurrent implementation](ImplConcurrent) this function can return
-    /// [LockingError::Poisoned](crate::LockingError::Poisoned) if the mutex
-    /// holding the base address has been poisoned.
+    /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) if the
+    /// mutex holding the base address has been poisoned.
     pub fn get_base(&self) -> Impl::LockResult<*mut u8> {
         Impl::get_base(&self.base)
     }
@@ -164,36 +171,32 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         Ok(())
     }
 
-    /// Stores a `value` of type `T` in the contiguous memory block.
+    /// Returns `true` if the provided value can be stored without growing the
+    /// container.
     ///
-    /// Value type is used to deduce type size and returned reference dropping
-    /// behavior.
+    /// It's usually better to try storing the value directly and then handle
+    /// the case where it wasn't stored (for unsafe implementation).
     ///
-    /// Returned value is implementation specific:
-    /// - For [concurrent implementation] it is
-    ///   `Result<SyncContiguousMemoryRef<T>, LockingError>`,
-    /// - For [default implementation] it is `ContiguousMemoryRef<T>`,
-    /// - For [fixed implementation] it is
-    ///   `Result<*mut u8, ContiguousMemoryError>`.
+    /// # Example
     ///
-    /// [concurrent implementation]: struct.ContiguousMemory.html#method.store_data-1
-    /// [default implementation]: struct.ContiguousMemory.html#method.store_data
-    /// [fixed implementation]: struct.ContiguousMemory.html#method.store_data-2
-    pub fn store<T: StoreRequirements>(
-        &mut self,
-        value: T,
-    ) -> <Impl as StorageDetails>::StoreResult<T>
-    where
-        Self: StoreData<Impl>,
-    {
-        let mut data = ManuallyDrop::new(value);
-        let layout = Layout::for_value(&data);
-        let pos = &mut *data as *mut T;
-        let result = unsafe { self.store_data(pos, layout) };
-        result
-    }
-
-    /// Returns `true` if the provided value can be stored.
+    /// ```rust
+    /// # use contiguous_mem::UnsafeContiguousMemory;
+    /// # use core::mem::size_of_val;
+    /// let mut storage = UnsafeContiguousMemory::new(0);
+    /// let value = [2, 4, 8, 16];
+    ///
+    /// # assert_eq!(storage.can_store(&value).unwrap(), false);
+    /// if !storage.can_store(&value).unwrap() {
+    ///     storage.resize(storage.get_capacity() + size_of_val(&value));
+    ///
+    ///     // ...update old pointers...
+    /// }
+    ///
+    /// let stored_value =
+    ///   storage.store(value).expect("unable to store after growing the container");
+    /// ```
+    ///
+    /// # Errors
     ///
     /// If the [`AllocationTracker`] can't be immutably accesed, a
     /// [`ContiguousMemoryError::TrackerInUse`] error is returned.
@@ -209,10 +212,46 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         let layout = Layout::for_value(&value);
         Ok(Impl::peek_next(&self.inner, layout)?.is_some())
     }
-}
 
-/// Trait for specializing store function across implementations.
-pub trait StoreData<Impl: ImplDetails> {
+    /// Stores a `value` of type `T` in the contiguous memory block and returns
+    /// a reference or a pointer pointing to it.
+    ///
+    /// Value type argument `T` is used to deduce type size and returned
+    /// reference dropping behavior.
+    ///
+    /// Returned value is implementation specific:
+    /// - For concurrent implementation it is
+    ///   `Result<SyncContiguousMemoryRef<T>, LockingError>`,
+    /// - For default implementation it is `ContiguousMemoryRef<T>`,
+    /// - For unsafe implementation it is
+    ///   `Result<*mut u8, ContiguousMemoryError>`.
+    ///
+    /// # Errors
+    ///
+    /// ## Concurrent implementation
+    ///
+    /// Concurrent implementation returns a
+    /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
+    /// when the [`AllocationTracker`] associated with the memory container is
+    /// poisoned.
+    ///
+    /// ## Unsafe implementation
+    ///
+    /// Unsafe implementation returns a [`ContiguousMemoryError::NoStorageLeft`]
+    /// indicating that the container couldn't store the provided data with
+    /// current size.
+    ///
+    /// Memory block can still be grown by calling [`ContiguousMemory::resize`],
+    /// but it can't be done automatically as that would invalidate all the
+    /// existing pointers without any indication.
+    pub fn store<T: StoreRequirements>(&mut self, value: T) -> Impl::StoreResult<T> {
+        let mut data = ManuallyDrop::new(value);
+        let layout = Layout::for_value(&data);
+        let pos = &mut *data as *mut T;
+        let result = unsafe { self.store_data(pos, layout) };
+        result
+    }
+
     /// Works same as [`store`](ContiguousMemory::store) but takes a pointer and
     /// layout.
     ///
@@ -220,128 +259,72 @@ pub trait StoreData<Impl: ImplDetails> {
     /// implementations that return a reference, but can be disabled by casting
     /// the provided pointer into `*mut ()` type and then calling
     /// [`core::mem::transmute`] on the returned reference.
-    unsafe fn store_data<T: StoreRequirements>(
+    pub unsafe fn store_data<T: StoreRequirements>(
         &mut self,
         data: *mut T,
         layout: Layout,
-    ) -> <Impl as StorageDetails>::StoreResult<T>;
-}
+    ) -> Impl::StoreResult<T> {
+        Impl::store_data(&mut self.inner, data, layout)
+    }
 
-impl StoreData<ImplConcurrent> for ContiguousMemoryStorage<ImplConcurrent> {
-    /// Returns a [`SyncContiguousMemoryRef`] pointing to the stored value, or a
-    /// [`LockingError::Poisoned`] error when the [`AllocationTracker`]
-    /// associated with the memory container is poisoned.
+    /// Assumes value is stored at the provided _relative_ `position` in
+    /// managed memory and returns a pointer or a reference to it.
     ///
-    /// [`AllocationTracker`]: crate::tracker::AllocationTracker
-    unsafe fn store_data<T: StoreRequirements>(
-        &mut self,
-        data: *mut T,
-        layout: Layout,
-    ) -> Result<SyncContiguousMemoryRef<T>, LockingError> {
-        let (addr, range) = loop {
-            match ImplConcurrent::store_next(&mut self.inner, layout) {
-                Ok(taken) => {
-                    let found =
-                        (taken.0 + ImplConcurrent::get_base(&self.inner.base)? as usize) as *mut u8;
-                    unsafe { core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size()) }
-                    break (found, taken);
-                }
-                Err(ContiguousMemoryError::NoStorageLeft) => {
-                    match self.resize(ImplConcurrent::get_capacity(&self.capacity) * 2) {
-                        Ok(_) => {}
-                        Err(ContiguousMemoryError::Lock(locking_err)) => return Err(locking_err),
-                        Err(other) => unreachable!(
-                            "reached unexpected error while growing the container to store data: {:?}",
-                            other
-                        ),
-                    };
-                }
-                Err(ContiguousMemoryError::Lock(locking_err)) => return Err(locking_err),
-                Err(other) => unreachable!(
-                    "reached unexpected error while looking for next region to store data: {:?}",
-                    other
-                ),
-            }
-        };
-
-        Ok(ImplConcurrent::build_ref(
-            &self.inner,
-            addr as *mut T,
-            &range,
-        ))
-    }
-}
-
-impl StoreData<ImplDefault> for ContiguousMemoryStorage<ImplDefault> {
-    /// Returns a [`ContiguousMemoryRef`] pointing to the stored value.
-    unsafe fn store_data<T: StoreRequirements>(
-        &mut self,
-        data: *mut T,
-        layout: Layout,
-    ) -> ContiguousMemoryRef<T> {
-        let (addr, range) = loop {
-            match ImplDefault::store_next(&mut self.inner, layout) {
-                Ok(taken) => {
-                    let found = (taken.0 + self.base.get() as usize) as *mut u8;
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
-                    }
-                    break (found, taken);
-                }
-                Err(ContiguousMemoryError::NoStorageLeft) => {
-                    match self.resize(ImplDefault::get_capacity(&self.capacity) * 2) {
-                        Ok(_) => {},
-                        Err(err) => unreachable!(
-                            "reached unexpected error while growing the container to store data: {:?}",
-                            err
-                        ),
-                    }
-                }
-                Err(other) => unreachable!(
-                    "reached unexpected error while looking for next region to store data: {:?}",
-                    other
-                ),
-            }
-        };
-
-        ImplDefault::build_ref(&self.inner, addr as *mut T, &range)
-    }
-}
-
-impl StoreData<ImplUnsafe> for ContiguousMemoryStorage<ImplUnsafe> {
-    /// Returns a raw pointer (`*mut T`) to the stored value or a
-    /// [`ContiguousMemoryError::NoStorageLeft`] indicating that the container
-    /// couldn't store the provided data with current size.
+    /// This functions isn't unsafe because creating an invalid pointer isn't
+    /// considered unsafe. Responsibility for guaranteeing safety falls on
+    /// code that's dereferencing the pointer.
     ///
-    /// Memory block can still be grown by calling [`ContiguousMemory::resize`],
-    /// but it can't be done automatically as that would invalidate all the
-    /// existing pointers without any indication.
-    unsafe fn store_data<T: StoreRequirements>(
-        &mut self,
-        data: *mut T,
-        layout: Layout,
-    ) -> Result<*mut T, ContiguousMemoryError> {
-        let (addr, range) = loop {
-            match ImplUnsafe::store_next(&mut self.inner, layout) {
-                Ok(taken) => {
-                    let found = (taken.0 + *self.base as usize) as *mut u8;
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
-                    }
-                    break (found, taken);
-                }
-                Err(other) => return Err(other),
-            }
-        };
-
-        Ok(ImplUnsafe::build_ref(&self.inner, addr as *mut T, &range))
+    /// # Example
+    ///
+    /// ```rust
+    /// # use contiguous_mem::UnsafeContiguousMemory;
+    /// let mut storage = UnsafeContiguousMemory::new(128);
+    /// let initial_position = storage.store(278u32).unwrap();
+    ///
+    /// // ...other code...
+    ///
+    /// let base_addr = storage.get_base();
+    /// storage.resize(512);
+    ///
+    /// let new_position: *mut u32 = storage.assume_stored(
+    ///     initial_position as usize - base_addr as usize
+    /// );
+    /// unsafe {
+    ///     assert_eq!(*new_position, 278u32);
+    /// }
+    /// ```
+    pub fn assume_stored<T: StoreRequirements>(
+        &self,
+        position: usize,
+    ) -> Impl::LockResult<Impl::ReferenceType<T>> {
+        Impl::assume_stored(&self.inner, position)
     }
 }
+
+#[allow(deprecated)]
+pub use details::StoreData;
 
 impl ContiguousMemoryStorage<ImplUnsafe> {
+    /// Clones the allocated memory region into a new ContiguousMemoryStorage.
+    ///
+    /// This function isn't unsafe, even though it ignores presence of `Copy`
+    /// bound on stored data, because it doesn't create any pointers.
+    pub unsafe fn copy_storage(&self) -> Self {
+        let current_layout = self.get_layout();
+        let result = Self::new_from_layout(current_layout).expect("current layout should be valid");
+        core::ptr::copy_nonoverlapping(self.get_base(), result.get_base(), current_layout.size());
+        result
+    }
+
     /// Allows freeing a memory range stored at provided `position`.
     ///
     /// Type of the position pointer `T` determines the size of the freed chunk.
+    ///
+    /// # Safety
+    ///
+    /// This function is considered unsafe because it can mark a memory range
+    /// as free while a valid reference is pointing to it from another place in
+    /// code.
     #[inline(always)]
     pub unsafe fn free_typed<T>(&mut self, position: *mut T) {
         Self::free(self, position, size_of::<T>())
@@ -349,11 +332,26 @@ impl ContiguousMemoryStorage<ImplUnsafe> {
 
     /// Allows freeing a memory range stored at provided `position` with the
     /// specified `size`.
+    ///
+    /// # Safety
+    ///
+    /// This function is considered unsafe because it can mark a memory range
+    /// as free while a valid reference is pointing to it from another place in
+    /// code.
     pub unsafe fn free<T>(&mut self, position: *mut T, size: usize) {
         let pos: usize = position.sub(self.get_base() as usize) as usize;
         if let Some(freed) = ImplUnsafe::free_region(&mut self.inner, ByteRange(pos, pos + size)) {
             core::ptr::drop_in_place(freed as *mut T);
         }
+    }
+}
+
+#[cfg(feature = "debug")]
+impl<Impl: ImplDetails = ImplDefault> core::fmt::Debug for ContiguousMemoryStorage<Impl> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ContiguousMemoryStorage")
+            .field("inner", &self.inner)
+            .finish()
     }
 }
 
