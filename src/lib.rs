@@ -95,7 +95,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// [LockingError::Poisoned](crate::LockingError::Poisoned) if the mutex
     /// holding the base address has been poisoned.
     pub fn get_base(&self) -> Impl::LockResult<*mut u8> {
-        Impl::get_base(&self.inner)
+        Impl::get_base(&self.base)
     }
 
     /// Returns the current capacity of the memory container.
@@ -104,7 +104,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// allocated for storing data. It may be larger than the amount of data
     /// currently stored within the container.
     pub fn get_capacity(&self) -> usize {
-        Impl::get_capacity(Impl::deref_state(&self.inner))
+        Impl::get_capacity(&self.capacity)
     }
 
     /// Returns the layout of the memory region containing stored data.
@@ -138,11 +138,11 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         &mut self,
         new_capacity: usize,
     ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
-        if new_capacity == Impl::get_capacity(Impl::deref_state(&self.inner)) {
+        if new_capacity == Impl::get_capacity(&self.capacity) {
             return Ok(None);
         }
 
-        let old_capacity = Impl::get_capacity(Impl::deref_state(&self.inner));
+        let old_capacity = Impl::get_capacity(&self.capacity);
         Impl::resize_tracker(&mut self.inner, new_capacity)?;
         let moved = match Impl::resize_container(&mut self.inner, new_capacity) {
             Ok(it) => it,
@@ -242,12 +242,12 @@ impl StoreData<ImplConcurrent> for ContiguousMemoryStorage<ImplConcurrent> {
             match ImplConcurrent::store_next(&mut self.inner, layout) {
                 Ok(taken) => {
                     let found =
-                        (taken.0 + ImplConcurrent::get_base(&self.inner)? as usize) as *mut u8;
+                        (taken.0 + ImplConcurrent::get_base(&self.inner.base)? as usize) as *mut u8;
                     unsafe { core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size()) }
                     break (found, taken);
                 }
                 Err(ContiguousMemoryError::NoStorageLeft) => {
-                    match self.resize(ImplConcurrent::get_capacity(&self.inner) * 2) {
+                    match self.resize(ImplConcurrent::get_capacity(&self.capacity) * 2) {
                         Ok(_) => {}
                         Err(ContiguousMemoryError::Lock(locking_err)) => return Err(locking_err),
                         Err(other) => unreachable!(
@@ -289,7 +289,7 @@ impl StoreData<ImplDefault> for ContiguousMemoryStorage<ImplDefault> {
                     break (found, taken);
                 }
                 Err(ContiguousMemoryError::NoStorageLeft) => {
-                    match self.resize(ImplDefault::get_capacity(&self.inner) * 2) {
+                    match self.resize(ImplDefault::get_capacity(&self.capacity) * 2) {
                         Ok(_) => {},
                         Err(err) => unreachable!(
                             "reached unexpected error while growing the container to store data: {:?}",
@@ -376,10 +376,21 @@ impl<Impl: ImplDetails> Deref for ContiguousMemoryStorage<Impl> {
 pub(crate) mod sealed {
     use super::*;
 
-    #[cfg_attr(feature = "debug", derive(Debug))]
     #[derive(Clone, PartialEq, Eq)]
     #[repr(transparent)]
     pub(crate) struct BaseLocation<Impl: StorageDetails>(pub(crate) Impl::Base);
+
+    #[cfg(feature = "debug")]
+    impl<Impl: StorageDetails> core::fmt::Debug for BaseLocation<Impl>
+    where
+        Impl::LockResult<*mut u8>: core::fmt::Debug,
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_tuple("BaseLocation")
+                .field(&Impl::get_base(&self.0))
+                .finish()
+        }
+    }
 
     impl<Impl: ImplDetails> Deref for BaseLocation<Impl> {
         type Target = <Impl as StorageDetails>::Base;
@@ -393,13 +404,28 @@ pub(crate) mod sealed {
     unsafe impl<Impl: ImplDetails> Send for BaseLocation<Impl> where Impl: PartialEq<ImplConcurrent> {}
     unsafe impl<Impl: ImplDetails> Sync for BaseLocation<Impl> where Impl: PartialEq<ImplConcurrent> {}
 
-    #[cfg_attr(feature = "debug", derive(Debug))]
     #[repr(C)]
     pub struct ContiguousMemoryState<Impl: StorageDetails = ImplDefault> {
         pub(crate) base: BaseLocation<Impl>,
-        pub(crate) size: Impl::SizeType,
+        pub(crate) capacity: Impl::SizeType,
         pub(crate) alignment: usize,
         pub(crate) tracker: Impl::AllocationTracker,
+    }
+
+    impl<Impl: StorageDetails> core::fmt::Debug for ContiguousMemoryState<Impl>
+    where
+        BaseLocation<Impl>: core::fmt::Debug,
+        Impl::SizeType: core::fmt::Debug,
+        Impl::AllocationTracker: core::fmt::Debug,
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("ContiguousMemoryState")
+                .field("base", &self.base)
+                .field("capacity", &self.capacity)
+                .field("alignment", &self.alignment)
+                .field("tracker", &self.tracker)
+                .finish()
+        }
     }
 
     impl<Impl: StorageDetails> ContiguousMemoryState<Impl> {
@@ -416,7 +442,7 @@ pub(crate) mod sealed {
         fn clone(&self) -> Self {
             Self {
                 base: self.base,
-                size: self.size,
+                capacity: self.capacity,
                 alignment: self.alignment,
                 tracker: self.tracker.clone(),
             }

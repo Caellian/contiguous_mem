@@ -51,6 +51,7 @@ pub trait ImplBase: Sized {
 /// A marker struct representing the behavior specialization that does not
 /// require thread-safety. This implementation skips mutexes, making it faster
 /// but unsuitable for concurrent usage.
+#[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplDefault;
 impl ImplBase for ImplDefault {
@@ -63,6 +64,7 @@ impl ImplBase for ImplDefault {
 /// operations. This implementation ensures that the container's operations can
 /// be used safely in asynchronous contexts, utilizing mutexes to prevent data
 /// races.
+#[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplConcurrent;
 impl ImplBase for ImplConcurrent {
@@ -76,6 +78,7 @@ impl ImplBase for ImplConcurrent {
 /// A marker struct representing the behavior specialization for unsafe
 /// implementation. Should be used when the container is guaranteed to outlive
 /// any pointers to data contained in represented memory block.
+#[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplUnsafe;
 impl ImplBase for ImplUnsafe {
@@ -110,10 +113,10 @@ pub trait StorageDetails: ImplBase {
     fn deref_state(state: &Self::StorageState) -> &ContiguousMemoryState<Self>;
 
     /// Retrieves the base pointer from the base instance.
-    fn get_base(state: &Self::StorageState) -> Self::LockResult<*mut u8>;
+    fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8>;
 
     /// Retrieves the capacity from the state.
-    fn get_capacity(base: &ContiguousMemoryState<Self>) -> usize;
+    fn get_capacity(capacity: &Self::SizeType) -> usize;
 
     /// Resizes and reallocates the base memory according to new capacity.
     fn resize_container(
@@ -163,7 +166,7 @@ impl StorageDetails for ImplConcurrent {
 
         Ok(Arc::new(ContiguousMemoryState {
             base: BaseLocation(RwLock::new(base)),
-            size: AtomicUsize::new(layout.size()),
+            capacity: AtomicUsize::new(layout.size()),
             alignment: layout.align(),
             tracker: Mutex::new(AllocationTracker::new(capacity)),
         }))
@@ -173,26 +176,24 @@ impl StorageDetails for ImplConcurrent {
         &state
     }
 
-    fn get_base(state: &Self::StorageState) -> Self::LockResult<*mut u8> {
-        state
-            .base
-            .read_named(LockSource::BaseAddress)
+    fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
+        base.read_named(LockSource::BaseAddress)
             .map(|result| *result)
     }
 
-    fn get_capacity(base: &ContiguousMemoryState<Self>) -> usize {
-        base.size.load(Ordering::Acquire)
+    fn get_capacity(capacity: &Self::SizeType) -> usize {
+        capacity.load(Ordering::Acquire)
     }
 
     fn resize_container(
         state: &mut Self::StorageState,
         new_capacity: usize,
     ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
-        let layout = Layout::from_size_align(Self::get_capacity(state), state.alignment)?;
+        let layout = Layout::from_size_align(Self::get_capacity(&state.capacity), state.alignment)?;
         let mut base_addr = state.base.write_named(LockSource::BaseAddress)?;
         let prev_addr = *base_addr;
         *base_addr = unsafe { allocator::realloc(*base_addr, layout, new_capacity) };
-        state.size.store(new_capacity, Ordering::Release);
+        state.capacity.store(new_capacity, Ordering::Release);
         Ok(if *base_addr != prev_addr {
             Some(*base_addr)
         } else {
@@ -253,7 +254,7 @@ impl StorageDetails for ImplDefault {
 
         Ok(Rc::new(ContiguousMemoryState {
             base: BaseLocation(Cell::new(base)),
-            size: Cell::new(layout.size()),
+            capacity: Cell::new(layout.size()),
             alignment: layout.align(),
             tracker: RefCell::new(AllocationTracker::new(capacity)),
         }))
@@ -263,23 +264,23 @@ impl StorageDetails for ImplDefault {
         &state
     }
 
-    fn get_base(state: &Self::StorageState) -> Self::LockResult<*mut u8> {
-        state.base.get()
+    fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
+        base.get()
     }
 
-    fn get_capacity(base: &ContiguousMemoryState<Self>) -> usize {
-        base.size.get()
+    fn get_capacity(capacity: &Self::SizeType) -> usize {
+        capacity.get()
     }
 
     fn resize_container(
         state: &mut Self::StorageState,
         new_capacity: usize,
     ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
-        let layout = Layout::from_size_align(state.size.get(), state.alignment)?;
+        let layout = Layout::from_size_align(Self::get_capacity(&state.capacity), state.alignment)?;
         let prev_base = state.base.get();
         let new_base = unsafe { allocator::realloc(prev_base, layout, new_capacity) };
         state.base.set(new_base);
-        state.size.set(new_capacity);
+        state.capacity.set(new_capacity);
         Ok(if new_base != prev_base {
             Some(new_base)
         } else {
@@ -340,7 +341,7 @@ impl StorageDetails for ImplUnsafe {
         let layout = Layout::from_size_align(capacity, align)?;
         Ok(ContiguousMemoryState {
             base: BaseLocation(base),
-            size: layout.size(),
+            capacity: layout.size(),
             alignment: layout.align(),
             tracker: AllocationTracker::new(capacity),
         })
@@ -350,22 +351,22 @@ impl StorageDetails for ImplUnsafe {
         &state
     }
 
-    fn get_base(state: &Self::StorageState) -> Self::LockResult<*mut u8> {
-        *state.base
+    fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
+        *base
     }
 
-    fn get_capacity(base: &ContiguousMemoryState<Self>) -> usize {
-        base.size
+    fn get_capacity(capacity: &Self::SizeType) -> usize {
+        *capacity
     }
 
     fn resize_container(
         state: &mut Self::StorageState,
         new_capacity: usize,
     ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
-        let layout = Layout::from_size_align(state.size, state.alignment)?;
+        let layout = Layout::from_size_align(state.capacity, state.alignment)?;
         let prev_base = *state.base;
         state.base = BaseLocation(unsafe { allocator::realloc(prev_base, layout, new_capacity) });
-        state.size = new_capacity;
+        state.capacity = new_capacity;
         Ok(if *state.base != prev_base {
             Some(*state.base)
         } else {
@@ -414,9 +415,9 @@ pub trait ReferenceDetails: ImplBase {
     type BorrowLock;
 
     /// Type of the concurrent mutable access exclusion read guard.
-    type ReadGuard<'a>;
+    type ReadGuard<'a>: DebugReq;
     /// Type of the concurrent mutable access exclusion write guard.
-    type WriteGuard<'a>;
+    type WriteGuard<'a>: DebugReq;
 
     /// Releases the specified memory region back to the allocation tracker.
     fn free_region(state: &mut Self::StorageState, range: ByteRange) -> Option<*mut ()>;
@@ -544,5 +545,5 @@ impl ReferenceDetails for ImplUnsafe {
 
 /// Trait representing requirements for implementation details of the
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage).
-pub trait ImplDetails: ImplBase + StorageDetails + ReferenceDetails {}
-impl<Impl: ImplBase + StorageDetails + ReferenceDetails> ImplDetails for Impl {}
+pub trait ImplDetails: ImplBase + StorageDetails + ReferenceDetails + DebugReq {}
+impl<Impl: ImplBase + StorageDetails + ReferenceDetails + DebugReq> ImplDetails for Impl {}

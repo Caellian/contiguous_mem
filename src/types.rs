@@ -142,6 +142,16 @@ impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     }
 }
 
+#[cfg(not(feature = "debug"))]
+pub trait DebugReq {}
+#[cfg(not(feature = "debug"))]
+impl<T: ?Sized> DebugReq for T {}
+
+#[cfg(feature = "debug")]
+pub trait DebugReq: core::fmt::Debug {}
+#[cfg(feature = "debug")]
+impl<T: ?Sized + core::fmt::Debug> DebugReq for T {}
+
 /// Size requirements for types pointed to by references
 #[cfg(feature = "ptr_metadata")]
 pub trait RefSizeReq {}

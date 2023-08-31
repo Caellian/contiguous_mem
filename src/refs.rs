@@ -94,7 +94,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
         let guard = self.inner.borrow_kind.read_named(LockSource::Reference)?;
 
         unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state)?;
+            let base = ImplConcurrent::get_base(&self.inner.state.base)?;
             let pos = base.add(self.inner.range.0);
 
             Ok(MemoryReadGuard {
@@ -125,7 +125,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
             .try_read_named(LockSource::Reference)?;
 
         unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state)?;
+            let base = ImplConcurrent::get_base(&self.inner.state.base)?;
             let pos = base.add(self.inner.range.0);
 
             Ok(MemoryReadGuard {
@@ -149,7 +149,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
     {
         let guard = self.inner.borrow_kind.write_named(LockSource::Reference)?;
         unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state)?;
+            let base = ImplConcurrent::get_base(&self.inner.state.base)?;
             let pos = base.add(self.inner.range.0);
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
@@ -184,7 +184,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
             .borrow_kind
             .try_write_named(LockSource::Reference)?;
         unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state)?;
+            let base = ImplConcurrent::get_base(&self.inner.state.base)?;
             let pos = base.add(self.inner.range.0);
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
@@ -220,6 +220,15 @@ impl<T: ?Sized> Clone for SyncContiguousMemoryRef<T> {
             #[cfg(not(feature = "ptr_metadata"))]
             _phantom: PhantomData,
         }
+    }
+}
+
+#[cfg(feature = "debug")]
+impl<T: ?Sized> core::fmt::Debug for SyncContiguousMemoryRef<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SyncContiguousMemoryRef")
+            .field("inner", &self.inner)
+            .finish()
     }
 }
 
@@ -263,7 +272,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRe
         }
 
         unsafe {
-            let base = ImplDefault::get_base(&self.inner.state);
+            let base = ImplDefault::get_base(&self.inner.state.base);
             let pos = base.add(self.inner.range.0);
 
             Ok(MemoryReadGuard {
@@ -299,7 +308,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRe
         }
 
         unsafe {
-            let base = ImplDefault::get_base(&self.inner.state);
+            let base = ImplDefault::get_base(&self.inner.state.base);
             let pos = base.add(self.inner.range.0);
 
             Ok(MemoryWriteGuard {
@@ -339,11 +348,19 @@ impl<T: ?Sized> Clone for ContiguousMemoryRef<T> {
     }
 }
 
+#[cfg(feature = "debug")]
+impl<T: ?Sized> core::fmt::Debug for ContiguousMemoryRef<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ContiguousMemoryRef")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
 pub(crate) mod sealed {
     use super::*;
 
     /// Internal state of [`ContiguousMemoryRef`] and [`SyncContiguousMemoryRef`].
-    #[cfg_attr(feature = "debug", derive(Debug))]
     pub struct ReferenceState<T: ?Sized, Impl: ImplDetails> {
         pub state: Impl::StorageState,
         pub range: ByteRange,
@@ -351,6 +368,21 @@ pub(crate) mod sealed {
         #[cfg(feature = "ptr_metadata")]
         pub drop_metadata: DynMetadata<dyn HandleDrop>,
         pub _phantom: PhantomData<T>,
+    }
+
+    #[cfg(feature = "debug")]
+    impl<T: ?Sized, Impl: ImplDetails> core::fmt::Debug for ReferenceState<T, Impl>
+    where
+        Impl::StorageState: core::fmt::Debug,
+        Impl::BorrowLock: core::fmt::Debug,
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("ReferenceState")
+                .field("state", &self.state)
+                .field("range", &self.range)
+                .field("borrow_kind", &self.borrow_kind)
+                .finish()
+        }
     }
 
     impl<T: ?Sized, Impl: ImplDetails> Drop for ReferenceState<T, Impl> {
@@ -383,6 +415,7 @@ use sealed::*;
 
 /// A smart reference wrapper responsible for tracking and managing a flag
 /// that indicates whether the memory segment is actively being written to.
+#[cfg_attr(feature = "debug", derive(Debug))]
 pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails> {
     state: Impl::RefState<T>,
     #[allow(unused)]
@@ -412,6 +445,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails> Drop for MemoryWriteGuard<'a, T, Impl> {
 
 /// A smart reference wrapper responsible for tracking and managing a flag
 /// that indicates whether the memory segment is actively being read from.
+#[cfg_attr(feature = "debug", derive(Debug))]
 pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails> {
     state: Impl::RefState<T>,
     #[allow(unused)]
