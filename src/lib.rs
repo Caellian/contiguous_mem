@@ -1,5 +1,5 @@
 #![allow(incomplete_features)]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(feature = "no_std", no_std)]
 #![cfg_attr(
     feature = "ptr_metadata",
     feature(ptr_metadata, unsize, specialization)
@@ -9,10 +9,10 @@
 #![warn(missing_docs)]
 #![doc = include_str!("../doc/crate.md")]
 
-#[cfg(not(feature = "std"))]
+#[cfg(feature = "no_std")]
 extern crate alloc;
 
-#[cfg(all(not(feature = "std"), not(feature = "no_std")))]
+#[cfg(all(feature = "no_std", not(feature = "no_std")))]
 compile_error!(
     "contiguous_mem: please enable 'no_std' feature to enable 'no_std' dependencies, or the default 'std' feature"
 );
@@ -312,7 +312,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// behavior.
     /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
     pub fn forget(self) {
-        std::mem::forget(self);
+        core::mem::forget(self);
     }
 }
 
@@ -509,7 +509,7 @@ pub type ContiguousMemory = ContiguousMemoryStorage<ImplDefault>;
 /// ```
 pub type UnsafeContiguousMemory = ContiguousMemoryStorage<ImplUnsafe>;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(all(test, not(feature = "no_std")))]
 mod test {
     use super::prelude::*;
 

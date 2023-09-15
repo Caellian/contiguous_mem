@@ -2,7 +2,7 @@
 
 use core::alloc::Layout;
 
-#[cfg(any(not(feature = "std")))]
+#[cfg(any(feature = "no_std"))]
 use crate::types::Vec;
 use crate::{error::ContiguousMemoryError, range::ByteRange};
 

@@ -19,8 +19,7 @@ portable-atomic = { version = "1", default-features = false, optional = true }
 spin = { version = "0.9", optional = true }
 
 [features]
-default = ["std", "ptr_metadata"]
-std = []
+default = ["leak_data"]
 no_std = ["dep:portable-atomic", "dep:spin"]
 debug = []
 leak_data = []

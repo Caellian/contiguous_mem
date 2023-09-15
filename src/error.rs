@@ -2,17 +2,17 @@
 
 #[cfg(all(feature = "error_in_core"))]
 use core::error::Error;
-#[cfg(all(not(feature = "error_in_core"), feature = "std"))]
+#[cfg(all(not(feature = "error_in_core"), not(feature = "no_std")))]
 use std::error::Error;
 
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 use std::sync::MutexGuard;
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 use std::sync::PoisonError;
 
 use core::alloc::LayoutError;
 use core::fmt::Debug;
-#[cfg(any(feature = "std", feature = "error_in_core"))]
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use crate::range::ByteRange;
@@ -33,7 +33,7 @@ pub enum LockingError {
     },
 }
 
-#[cfg(any(feature = "std", feature = "error_in_core"))]
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Display for LockingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -62,14 +62,14 @@ impl Display for LockingError {
     }
 }
 
-#[cfg(any(feature = "std", feature = "error_in_core"))]
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Error for LockingError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
     fn from(_: PoisonError<MutexGuard<'_, *mut u8>>) -> Self {
         LockingError::Poisoned {
@@ -78,7 +78,7 @@ impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 impl From<PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>> for LockingError {
     fn from(_: PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>) -> Self {
         LockingError::Poisoned {
@@ -95,7 +95,7 @@ pub struct RegionBorrowedError {
     pub range: ByteRange,
 }
 
-#[cfg(any(feature = "std", feature = "error_in_core"))]
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Display for RegionBorrowedError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
@@ -106,7 +106,7 @@ impl Display for RegionBorrowedError {
     }
 }
 
-#[cfg(any(feature = "std", feature = "error_in_core"))]
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Error for RegionBorrowedError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
@@ -164,7 +164,7 @@ pub enum LockSource {
     Reference,
 }
 
-#[cfg(any(feature = "std", feature = "error_in_core"))]
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Display for ContiguousMemoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -199,7 +199,7 @@ impl Display for ContiguousMemoryError {
     }
 }
 
-#[cfg(any(feature = "std", feature = "error_in_core"))]
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Error for ContiguousMemoryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {

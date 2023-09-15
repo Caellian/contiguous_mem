@@ -15,8 +15,7 @@ See individual items for usage examples.
 
 ## Features
 
-- `std` (**default**) - use `std` environment sync primitives and locks
-- `no_std` - enables `no_std` dependencies
+- `no_std` - enables `no_std` dependencies for atomics, mutexes and rwlocks
 - `leak_data` (**default**) - disables `Copy` requirement for stored types, but any
   references in stored data will be leaked when the memory container is dropped
 - `debug` - enables `derive(Debug)` on structures unrelated to error handling

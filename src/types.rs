@@ -1,6 +1,6 @@
 //! Module re-exporting used types any polyfill to help with feature support.
 
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 mod std_imports {
     pub use std::rc::Rc;
     pub use std::sync::Arc;
@@ -11,10 +11,10 @@ mod std_imports {
     pub use std::alloc as allocator;
 }
 
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 pub use std_imports::*;
 
-#[cfg(not(feature = "std"))]
+#[cfg(feature = "no_std")]
 mod nostd_imports {
     pub use spin::Mutex;
     pub use spin::MutexGuard;
@@ -27,7 +27,7 @@ mod nostd_imports {
     pub use ::alloc::rc::Rc;
     pub use ::alloc::sync::Arc;
 }
-#[cfg(not(feature = "std"))]
+#[cfg(feature = "no_std")]
 pub use nostd_imports::*;
 
 use crate::error::{LockSource, LockingError};
@@ -44,7 +44,7 @@ pub(crate) trait MutexTypesafe<T: ?Sized> {
         source: LockSource,
     ) -> Result<MutexGuard<T>, crate::error::LockingError>;
 }
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
     fn lock_named(&self, source: LockSource) -> Result<MutexGuard<T>, crate::error::LockingError> {
         match self.lock() {
@@ -63,18 +63,18 @@ impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
         }
     }
 }
-#[cfg(not(feature = "std"))]
+#[cfg(feature = "no_std")]
 impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
     fn lock_named(&self, _source: LockSource) -> Result<MutexGuard<T>, LockingError> {
         Ok(self.lock())
     }
     fn try_lock_named(
         &self,
-        _source: LockSource,
+        source: LockSource,
     ) -> Result<MutexGuard<T>, crate::error::LockingError> {
         match self.try_lock() {
             Some(it) => Ok(it),
-            None => Err(LockingError::WouldBlock),
+            None => Err(LockingError::WouldBlock { source }),
         }
     }
 }
@@ -85,7 +85,7 @@ pub(crate) trait RwLockTypesafe<T: ?Sized> {
     fn write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError>;
     fn try_write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError>;
 }
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     fn read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
         match self.read() {
@@ -117,16 +117,16 @@ impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
         }
     }
 }
-#[cfg(not(feature = "std"))]
+#[cfg(feature = "no_std")]
 impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     fn read_named(&self, _source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
         Ok(self.read())
     }
 
-    fn try_read_named(&self, _source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
+    fn try_read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
         match self.try_read() {
             Some(guard) => Ok(guard),
-            None => Err(LockingError::WouldBlock),
+            None => Err(LockingError::WouldBlock { source }),
         }
     }
 
@@ -134,10 +134,10 @@ impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
         Ok(self.write())
     }
 
-    fn try_write_named(&self, _source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError> {
+    fn try_write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError> {
         match self.try_write() {
             Some(guard) => Ok(guard),
-            None => Err(LockingError::WouldBlock),
+            None => Err(LockingError::WouldBlock { source }),
         }
     }
 }

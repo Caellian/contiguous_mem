@@ -265,8 +265,8 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
         let inner: *mut ReferenceState<T, ImplConcurrent> = self.inner.as_ref()
             as *const ReferenceState<T, ImplConcurrent>
             as *mut ReferenceState<T, ImplConcurrent>;
-        std::ptr::drop_in_place(&mut (*inner).state);
-        std::mem::forget(self.inner);
+        core::ptr::drop_in_place(&mut (*inner).state);
+        core::mem::forget(self.inner);
         result
     }
 }
@@ -494,8 +494,8 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
         let inner: *mut ReferenceState<T, ImplDefault> = self.inner.as_ref()
             as *const ReferenceState<T, ImplDefault>
             as *mut ReferenceState<T, ImplDefault>;
-        std::ptr::drop_in_place(&mut (*inner).state);
-        std::mem::forget(self.inner);
+        core::ptr::drop_in_place(&mut (*inner).state);
+        core::mem::forget(self.inner);
         result
     }
 }

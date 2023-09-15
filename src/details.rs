@@ -17,9 +17,9 @@ use core::{
 
 use core::marker::PhantomData;
 
-#[cfg(not(feature = "std"))]
+#[cfg(feature = "no_std")]
 use portable_atomic::{AtomicUsize, Ordering};
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{
