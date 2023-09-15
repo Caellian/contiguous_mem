@@ -184,15 +184,15 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// let mut storage = UnsafeContiguousMemory::new(0);
     /// let value = [2, 4, 8, 16];
     ///
-    /// # assert_eq!(storage.can_store(&value).unwrap(), false);
-    /// if !storage.can_store(&value).unwrap() {
+    /// # assert_eq!(storage.can_push(&value).unwrap(), false);
+    /// if !storage.can_push(&value).unwrap() {
     ///     storage.resize(storage.get_capacity() + size_of_val(&value));
     ///
     ///     // ...update old pointers...
     /// }
     ///
     /// let stored_value =
-    ///   storage.store(value).expect("unable to store after growing the container");
+    ///   storage.push(value).expect("unable to store after growing the container");
     /// ```
     ///
     /// # Errors
@@ -240,7 +240,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// Memory block can still be grown by calling [`ContiguousMemory::resize`],
     /// but it can't be done automatically as that would invalidate all the
     /// existing pointers without any indication.
-    pub fn push<T: StoreRequirements>(&mut self, value: T) -> Impl::StoreResult<T> {
+    pub fn push<T: StoreRequirements>(&mut self, value: T) -> Impl::PushResult<T> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
         let pos = &mut *data as *mut T;
@@ -259,7 +259,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         &mut self,
         data: *mut T,
         layout: Layout,
-    ) -> Impl::StoreResult<T> {
+    ) -> Impl::PushResult<T> {
         Impl::push_raw(&mut self.inner, data, layout)
     }
 
@@ -275,7 +275,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// ```rust
     /// # use contiguous_mem::UnsafeContiguousMemory;
     /// let mut storage = UnsafeContiguousMemory::new(128);
-    /// let initial_position = storage.store(278u32).unwrap();
+    /// let initial_position = storage.push(278u32).unwrap();
     ///
     /// // ...other code...
     ///

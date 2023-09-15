@@ -109,7 +109,7 @@ pub trait StorageDetails: ImplBase {
     type SizeType;
 
     /// The type representing result of storing data.
-    type StoreResult<T>;
+    type PushResult<T>;
 
     /// Builds a new internal state from provided parameters
     fn build_state(
@@ -167,7 +167,7 @@ impl StorageDetails for ImplConcurrent {
     type Base = RwLock<*mut u8>;
     type AllocationTracker = Mutex<AllocationTracker>;
     type SizeType = AtomicUsize;
-    type StoreResult<T> = Result<Self::ReferenceType<T>, LockingError>;
+    type PushResult<T> = Result<Self::ReferenceType<T>, LockingError>;
 
     fn build_state(
         base: *mut u8,
@@ -261,7 +261,7 @@ impl StorageDetails for ImplDefault {
     type Base = Cell<*mut u8>;
     type AllocationTracker = RefCell<AllocationTracker>;
     type SizeType = Cell<usize>;
-    type StoreResult<T> = ContiguousEntryRef<T>;
+    type PushResult<T> = ContiguousEntryRef<T>;
 
     fn build_state(
         base: *mut u8,
@@ -354,7 +354,7 @@ impl StorageDetails for ImplUnsafe {
     type Base = *mut u8;
     type AllocationTracker = AllocationTracker;
     type SizeType = usize;
-    type StoreResult<T> = Result<*mut T, ContiguousMemoryError>;
+    type PushResult<T> = Result<*mut T, ContiguousMemoryError>;
 
     fn build_state(
         base: *mut u8,
@@ -576,7 +576,7 @@ pub trait StoreDataDetails: StorageDetails {
         state: &mut Self::StorageState,
         data: *mut T,
         layout: Layout,
-    ) -> Self::StoreResult<T>;
+    ) -> Self::PushResult<T>;
 
     fn assume_stored<T: StoreRequirements>(
         state: &Self::StorageState,
