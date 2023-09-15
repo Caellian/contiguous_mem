@@ -1,6 +1,6 @@
 [package]
 name = "contiguous-mem"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 description = "A contiguous memory storage"
 authors = ["Tin Švagelj <tin.svagelj@live.com>"]
@@ -19,13 +19,16 @@ portable-atomic = { version = "1", default-features = false, optional = true }
 spin = { version = "0.9", optional = true }
 
 [features]
-default = ["std", "leak_data"]
+default = ["std", "ptr_metadata"]
 std = []
 no_std = ["dep:portable-atomic", "dep:spin"]
 debug = []
 leak_data = []
 ptr_metadata = []
 error_in_core = []
+
+[dev-dependencies]
+byteorder = "1.4"
 
 [package.metadata.docs.rs]
 all-features = true

@@ -22,13 +22,12 @@ impl Greetable for Dog {
 
 fn main() {
     let mut storage = ContiguousMemory::new(4096);
-    let person1 = storage.store(Person("Joe".to_string()));
+    let person1 = storage.push(Person("Joe".to_string()));
 
-    let person2: ContiguousMemoryRef<dyn Greetable> =
-        storage.store(Person("Craig".to_string())).into_dyn();
+    let person2: ContiguousEntryRef<dyn Greetable> =
+        storage.push(Person("Craig".to_string())).into_dyn();
 
-    let dog: ContiguousMemoryRef<dyn Greetable> =
-        storage.store(Dog("Rover".to_string())).into_dyn();
+    let dog: ContiguousEntryRef<dyn Greetable> = storage.push(Dog("Rover".to_string())).into_dyn();
 
     person1.get().print_hello();
     person2.get().print_hello();

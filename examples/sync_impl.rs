@@ -10,21 +10,21 @@ fn main() {
 
     let mut sent_storage = storage.clone();
     let writer_one =
-        std::thread::spawn(move || sent_storage.store(22u64).expect("unable to store number"));
+        std::thread::spawn(move || sent_storage.push(22u64).expect("unable to store number"));
 
     let data = Data { value: 42 };
 
     let mut sent_storage = storage.clone();
     let writer_two = std::thread::spawn(move || {
         sent_storage
-            .store(Data { value: 42 })
+            .push(Data { value: 42 })
             .expect("unable to store Data")
     });
 
-    let stored_number: SyncContiguousMemoryRef<u64> =
+    let stored_number: SyncContiguousEntryRef<u64> =
         writer_one.join().expect("unable to join number thread");
     let mut stored_number_clone = stored_number.clone();
-    let stored_data: SyncContiguousMemoryRef<Data> =
+    let stored_data: SyncContiguousEntryRef<Data> =
         writer_two.join().expect("unable to join Data thread");
 
     let number_ref = stored_number

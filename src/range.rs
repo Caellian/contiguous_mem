@@ -27,18 +27,24 @@ impl ByteRange {
 
     /// Aligns this byte range to the provided `alignment`.
     pub fn aligned(&self, alignment: usize) -> Self {
-        let offset = (self.0 as *const u8).align_offset(alignment);
-        ByteRange(self.0 + offset, self.1 + offset)
+        let modulo = self.0 % alignment;
+        if modulo == 0 {
+            return *self;
+        }
+        self.offset(alignment - modulo)
     }
 
-    /// Caps the size of this byte range to the provided `size` and returns it.
-    /// If the size of this byte range is lesser than the required size, `None`
-    /// is returned instead.
-    pub fn cap_size(&self, size: usize) -> Option<Self> {
+    /// Caps the end address of this byte range to the provided `position`.
+    pub fn cap_end(&self, position: usize) -> Self {
+        ByteRange(self.0, position.min(self.1))
+    }
+
+    /// Caps the size of this byte range to the provided `size`.
+    pub fn cap_size(&self, size: usize) -> Self {
         if self.len() < size {
-            return None;
+            return *self;
         }
-        Some(ByteRange(self.0, self.0 + size))
+        ByteRange(self.0, self.0 + size)
     }
 
     /// Offsets this byte range by a provided unsigned `offset`.

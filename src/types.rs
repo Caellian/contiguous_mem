@@ -59,7 +59,7 @@ impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
         match self.try_lock() {
             Ok(it) => Ok(it),
             Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { source }),
-            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock),
+            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { source }),
         }
     }
 }
@@ -97,7 +97,7 @@ impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     fn try_read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
         match self.try_read() {
             Ok(guard) => Ok(guard),
-            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock),
+            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { source }),
             Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { source }),
         }
     }
@@ -112,7 +112,7 @@ impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     fn try_write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError> {
         match self.try_write() {
             Ok(guard) => Ok(guard),
-            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock),
+            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { source }),
             Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { source }),
         }
     }
@@ -198,6 +198,8 @@ mod pointer {
     ///
     /// This is a workaround for invoking [`Drop::drop`] as well as calling
     /// compiler generated drop glue dynamically.
+    ///
+    /// Note that `do_drop` doesn't deallocate the memory.
     pub trait HandleDrop {
         fn do_drop(&mut self);
     }

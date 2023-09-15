@@ -1,9 +1,9 @@
 //! Contains code relating to returned reference types and their internal state.
 //!
-//! Default implementation returns [`ContiguousMemoryRef`] when items are
+//! Default implementation returns [`ContiguousEntryRef`] when items are
 //! stored which can be easily accessed through [`CMRef`] alias.
 //!
-//! Concurrent implementation returns [`SyncContiguousMemoryRef`] when items are
+//! Concurrent implementation returns [`SyncContiguousEntryRef`] when items are
 //! stored which can be easily accessed through [`SCMRef`] alias.
 
 use core::{
@@ -18,60 +18,9 @@ use crate::{
     types::*,
 };
 
-/// Trait specifying interface of returned reference types.
-pub trait ContiguousMemoryReference<T: ?Sized, Impl: ImplDetails> {
-    /// Error type returned when the data represented by the reference can't be
-    /// safely accessed/borrowed.
-    ///
-    /// - For concurrent implementation it's [`LockingError`].
-    /// - For default implementation it's [`RegionBorrowedError`]
-    type BorrowError;
-
-    /// Returns a byte range within container memory this reference points to.
-    fn range(&self) -> ByteRange;
-
-    /// Returns a reference to data at its current location and panics if the
-    /// reference has been mutably borrowed or blocks the thread for the
-    /// concurrent implementation.
-    fn get<'a>(&'a self) -> Impl::LockResult<MemoryReadGuard<'a, T, Impl>>
-    where
-        T: RefSizeReq;
-
-    /// Returns a reference to data at its current location and returns the
-    /// appropriate [error](Self::BorrowError) if that's not possible.
-    fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, Impl>, Self::BorrowError>
-    where
-        T: RefSizeReq;
-
-    /// Returns a mutable reference to data at its current location and panics
-    /// if the reference has been mutably borrowed or blocks the thread for
-    /// concurrent implementation.
-    fn get_mut<'a>(&'a mut self) -> Impl::LockResult<MemoryWriteGuard<'a, T, Impl>>
-    where
-        T: RefSizeReq;
-
-    /// Returns a mutable reference to data at its current location or an error
-    /// [error](Self::BorrowError) if the represented memory region is already
-    /// mutably borrowed.
-    fn try_get_mut<'a>(&'a mut self) -> Result<MemoryWriteGuard<'a, T, Impl>, Self::BorrowError>
-    where
-        T: RefSizeReq;
-
-    /// Casts this reference into a dynamic type `R`.
-    #[cfg(feature = "ptr_metadata")]
-    fn into_dyn<R: ?Sized>(self) -> Impl::ReferenceType<R>
-    where
-        T: Sized + Unsize<R>;
-
-    /// Tries downcasting this dynamic reference into a discrete type `R`,
-    /// returns None if `R` drop handler doesn't match the original one.
-    #[cfg(feature = "ptr_metadata")]
-    fn downcast_dyn<R: Unsize<T>>(self) -> Option<Impl::ReferenceType<R>>;
-}
-
 /// A synchronized (thread-safe) reference to `T` data stored in a
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage) structure.
-pub struct SyncContiguousMemoryRef<T: ?Sized> {
+pub struct SyncContiguousEntryRef<T: ?Sized> {
     pub(crate) inner: Arc<ReferenceState<T, ImplConcurrent>>,
     #[cfg(feature = "ptr_metadata")]
     pub(crate) metadata: <T as Pointee>::Metadata,
@@ -79,13 +28,12 @@ pub struct SyncContiguousMemoryRef<T: ?Sized> {
     pub(crate) _phantom: PhantomData<T>,
 }
 
-/// A shorter type name for [`SyncContiguousMemoryRef`].
-pub type SCMRef<T> = SyncContiguousMemoryRef<T>;
+/// A shorter type name for [`SyncContiguousEntryRef`].
+pub type SCERef<T> = SyncContiguousEntryRef<T>;
 
-impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousMemoryRef<T> {
-    type BorrowError = LockingError;
-
-    fn range(&self) -> ByteRange {
+impl<T: ?Sized> SyncContiguousEntryRef<T> {
+    /// Returns a byte range within container memory this reference points to.
+    pub fn range(&self) -> ByteRange {
         self.inner.range
     }
 
@@ -95,7 +43,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
     ///
     /// If the data is mutably accessed, this method will block the current
     /// thread until it becomes available.
-    fn get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplConcurrent>, LockingError>
+    pub fn get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplConcurrent>, LockingError>
     where
         T: RefSizeReq,
     {
@@ -120,10 +68,10 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
     /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
     /// if the Mutex holding the `base` address pointer has been poisoned.
     ///
-    /// If the data is mutably accessed, this method return a
+    /// If the data is mutably accessed, this method returns a
     /// [`LockingError::WouldBlock`](crate::error::LockingError::WouldBlock)
     /// error.
-    fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplConcurrent>, LockingError>
+    pub fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplConcurrent>, LockingError>
     where
         T: RefSizeReq,
     {
@@ -151,7 +99,9 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
     /// [`LockingError::Poisoned`] error if the Mutex holding the base address
     /// pointer or the Mutex holding concurrent mutable access flag has been
     /// poisoned.
-    fn get_mut<'a>(&'a mut self) -> Result<MemoryWriteGuard<'a, T, ImplConcurrent>, LockingError>
+    pub fn get_mut<'a>(
+        &'a mut self,
+    ) -> Result<MemoryWriteGuard<'a, T, ImplConcurrent>, LockingError>
     where
         T: RefSizeReq,
     {
@@ -173,6 +123,8 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
     /// Returns a write guard to referenced data at its current location or a
     /// `LockingError` if that isn't possible.
     ///
+    /// # Errors
+    ///
     /// This function can return the following errors:
     ///
     /// - [`LockingError::Poisoned`] error if the Mutex holding the base address
@@ -181,7 +133,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
     ///
     /// - [`LockingError::WouldBlock`] error if accessing referenced data chunk
     ///   would be blocking.
-    fn try_get_mut<'a>(
+    pub fn try_get_mut<'a>(
         &'a mut self,
     ) -> Result<MemoryWriteGuard<'a, T, ImplConcurrent>, LockingError>
     where
@@ -192,7 +144,7 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
             .borrow_kind
             .try_write_named(LockSource::Reference)?;
         unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state.base)?;
+            let base = ImplConcurrent::try_get_base(&self.inner.state.base)?;
             let pos = base.add(self.inner.range.0);
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
@@ -205,36 +157,123 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplConcurrent> for SyncContiguousM
         }
     }
 
+    /// Casts this reference into a dynamic type `R`.
     #[cfg(feature = "ptr_metadata")]
-    fn into_dyn<R: ?Sized>(self) -> SyncContiguousMemoryRef<R>
+    pub fn into_dyn<R: ?Sized>(self) -> SyncContiguousEntryRef<R>
     where
         T: Sized + Unsize<R>,
     {
         unsafe {
-            SyncContiguousMemoryRef {
+            SyncContiguousEntryRef {
                 inner: core::mem::transmute(self.inner),
                 metadata: static_metadata::<T, R>(),
             }
         }
     }
 
+    /// Tries downcasting this dynamic reference into a discrete type `R`,
+    /// returns None if `R` drop handler doesn't match the original one.
     #[cfg(feature = "ptr_metadata")]
-    fn downcast_dyn<R: Unsize<T>>(self) -> Option<SyncContiguousMemoryRef<R>> {
+    pub fn downcast_dyn<R: Unsize<T>>(self) -> Option<SyncContiguousEntryRef<R>> {
         if self.inner.drop_metadata != static_metadata::<R, dyn HandleDrop>() {
             return None;
         }
         unsafe {
-            Some(SyncContiguousMemoryRef {
+            Some(SyncContiguousEntryRef {
                 inner: core::mem::transmute(self.inner),
                 metadata: (),
             })
         }
     }
+
+    /// Creates an immutable pointer to underlying data, blocking the current
+    /// thread until base address can be read.
+    ///
+    /// This function can return a [`LockingError::Poisoned`] error if the Mutex
+    /// holding the base address pointer has been poisoned.
+    ///
+    /// # Safety
+    ///
+    /// See: [`ContiguousEntryRef::as_ptr`]
+    pub unsafe fn as_ptr(&self) -> Result<*const T, LockingError>
+    where
+        T: RefSizeReq,
+    {
+        self.as_ptr_mut().map(|it| it as *const T)
+    }
+
+    /// Creates a mutable pointer to underlying data, blocking the current
+    /// thread until base address can be read.
+    ///
+    /// This function can return a [`LockingError::Poisoned`] error if the Mutex
+    /// holding the base address pointer has been poisoned.
+    ///
+    /// # Safety
+    ///
+    /// See: [`ContiguousEntryRef::as_ptr_mut`]
+    pub unsafe fn as_ptr_mut(&self) -> Result<*mut T, LockingError>
+    where
+        T: RefSizeReq,
+    {
+        let base = ImplConcurrent::get_base(&self.inner.state.base)?;
+        let pos = base.add(self.inner.range.0);
+        #[cfg(not(feature = "ptr_metadata"))]
+        {
+            Ok(pos as *mut T)
+        }
+        #[cfg(feature = "ptr_metadata")]
+        {
+            Ok(core::ptr::from_raw_parts_mut::<T>(
+                pos as *mut (),
+                self.metadata,
+            ))
+        }
+    }
+
+    /// Creates an immutable pointer to underlying data while also preventing
+    /// the occupied memory region from being marked as free, blocking the
+    /// current thread until base address can be read
+    ///
+    /// This function can return a [`LockingError::Poisoned`] error if the Mutex
+    /// holding the base address pointer has been poisoned.
+    ///
+    /// # Safety
+    ///
+    /// See: [`ContiguousEntryRef::into_ptr`]
+    pub unsafe fn into_ptr(self) -> Result<*const T, LockingError>
+    where
+        T: RefSizeReq,
+    {
+        self.into_ptr_mut().map(|it| it as *const T)
+    }
+
+    /// Creates a mutable pointer to underlying data while also preventing
+    /// the occupied memory region from being marked as free, blocking the
+    /// current thread until base address can be read
+    ///
+    /// This function can return a [`LockingError::Poisoned`] error if the Mutex
+    /// holding the base address pointer has been poisoned.
+    ///
+    /// # Safety
+    ///
+    /// See: [`ContiguousEntryRef::into_ptr_mut`]
+    pub unsafe fn into_ptr_mut(self) -> Result<*mut T, LockingError>
+    where
+        T: RefSizeReq,
+    {
+        let result = self.as_ptr_mut();
+        let inner: *mut ReferenceState<T, ImplConcurrent> = self.inner.as_ref()
+            as *const ReferenceState<T, ImplConcurrent>
+            as *mut ReferenceState<T, ImplConcurrent>;
+        std::ptr::drop_in_place(&mut (*inner).state);
+        std::mem::forget(self.inner);
+        result
+    }
 }
 
-impl<T: ?Sized> Clone for SyncContiguousMemoryRef<T> {
+impl<T: ?Sized> Clone for SyncContiguousEntryRef<T> {
     fn clone(&self) -> Self {
-        SyncContiguousMemoryRef {
+        SyncContiguousEntryRef {
             inner: self.inner.clone(),
             #[cfg(feature = "ptr_metadata")]
             metadata: self.metadata.clone(),
@@ -245,9 +284,9 @@ impl<T: ?Sized> Clone for SyncContiguousMemoryRef<T> {
 }
 
 #[cfg(feature = "debug")]
-impl<T: ?Sized> core::fmt::Debug for SyncContiguousMemoryRef<T> {
+impl<T: ?Sized> core::fmt::Debug for SyncContiguousEntryRef<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SyncContiguousMemoryRef")
+        f.debug_struct("SyncContiguousEntryRef")
             .field("inner", &self.inner)
             .finish()
     }
@@ -255,31 +294,36 @@ impl<T: ?Sized> core::fmt::Debug for SyncContiguousMemoryRef<T> {
 
 /// A thread-unsafe reference to `T` data stored in
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage) structure.
-pub struct ContiguousMemoryRef<T: ?Sized> {
+pub struct ContiguousEntryRef<T: ?Sized> {
     pub(crate) inner: Rc<ReferenceState<T, ImplDefault>>,
     #[cfg(feature = "ptr_metadata")]
     pub(crate) metadata: <T as Pointee>::Metadata,
     #[cfg(not(feature = "ptr_metadata"))]
     pub(crate) _phantom: PhantomData<T>,
 }
-/// A shorter type name for [`ContiguousMemoryRef`].
-pub type CMRef<T> = ContiguousMemoryRef<T>;
 
-impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRef<T> {
-    type BorrowError = RegionBorrowedError;
+/// A shorter type name for [`ContiguousEntryRef`].
+pub type CERef<T> = ContiguousEntryRef<T>;
 
-    fn range(&self) -> ByteRange {
+impl<T: ?Sized> ContiguousEntryRef<T> {
+    /// Returns a byte range within container memory this reference points to.
+    pub fn range(&self) -> ByteRange {
         self.inner.range
     }
 
-    fn get<'a>(&'a self) -> MemoryReadGuard<'a, T, ImplDefault>
+    /// Returns a reference to data at its current location and panics if the
+    /// represented memory region is mutably borrowed.
+    pub fn get<'a>(&'a self) -> MemoryReadGuard<'a, T, ImplDefault>
     where
         T: RefSizeReq,
     {
-        ContiguousMemoryRef::<T>::try_get(self).expect("mutably borrowed")
+        ContiguousEntryRef::<T>::try_get(self).expect("mutably borrowed")
     }
 
-    fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplDefault>, RegionBorrowedError>
+    /// Returns a reference to data at its current location or a
+    /// [`RegionBorrowedError`] error if the represented memory region is
+    /// mutably borrowed.
+    pub fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplDefault>, RegionBorrowedError>
     where
         T: RefSizeReq,
     {
@@ -307,16 +351,19 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRe
         }
     }
 
-    fn get_mut<'a>(&'a mut self) -> MemoryWriteGuard<'a, T, ImplDefault>
+    /// Returns a mutable reference to data at its current location and panics
+    /// if the reference has already been borrowed.
+    pub fn get_mut<'a>(&'a mut self) -> MemoryWriteGuard<'a, T, ImplDefault>
     where
         T: RefSizeReq,
     {
-        ContiguousMemoryRef::<T>::try_get_mut(self).expect("mutably borrowed")
+        ContiguousEntryRef::<T>::try_get_mut(self).expect("mutably borrowed")
     }
 
-    /// This implementation returns a [`RegionBorrowedError`] error if the
-    /// represented memory region is already borrowed.
-    fn try_get_mut<'a>(
+    /// Returns a mutable reference to data at its current location or a
+    /// [`RegionBorrowedError`] error if the represented memory region is
+    /// already borrowed.
+    pub fn try_get_mut<'a>(
         &'a mut self,
     ) -> Result<MemoryWriteGuard<'a, T, ImplDefault>, RegionBorrowedError>
     where
@@ -345,36 +392,117 @@ impl<T: ?Sized> ContiguousMemoryReference<T, ImplDefault> for ContiguousMemoryRe
         }
     }
 
+    /// Casts this reference into a dynamic type `R`.
     #[cfg(feature = "ptr_metadata")]
-    fn into_dyn<R: ?Sized>(self) -> ContiguousMemoryRef<R>
+    pub fn into_dyn<R: ?Sized>(self) -> ContiguousEntryRef<R>
     where
         T: Sized + Unsize<R>,
     {
         unsafe {
-            ContiguousMemoryRef {
+            ContiguousEntryRef {
                 inner: core::mem::transmute(self.inner),
                 metadata: static_metadata::<T, R>(),
             }
         }
     }
 
+    /// Tries downcasting this dynamic reference into a discrete type `R`,
+    /// returns None if `R` drop handler doesn't match the original one.
     #[cfg(feature = "ptr_metadata")]
-    fn downcast_dyn<R: Unsize<T>>(self) -> Option<ContiguousMemoryRef<R>> {
+    pub fn downcast_dyn<R: Unsize<T>>(self) -> Option<ContiguousEntryRef<R>> {
         if self.inner.drop_metadata != static_metadata::<R, dyn HandleDrop>() {
             return None;
         }
         unsafe {
-            Some(ContiguousMemoryRef {
+            Some(ContiguousEntryRef {
                 inner: core::mem::transmute(self.inner),
                 metadata: (),
             })
         }
     }
+
+    /// Creates an immutable pointer to underlying data.
+    ///
+    /// # Safety
+    ///
+    /// This function returns a pointer that may become invalid if the
+    /// container's memory is resized to a capacity which requires the memory
+    /// segment to be moved.
+    ///
+    /// When the reference goes out of scope, its region will be marked as free
+    /// which means that a subsequent call to [`ContiguousMemoryStorage::push`]
+    /// or friends can cause undefined behavior when dereferencing the pointer.
+    pub unsafe fn as_ptr(&self) -> *const T
+    where
+        T: RefSizeReq,
+    {
+        self.as_ptr_mut() as *const T
+    }
+
+    /// Creates a mutable pointer to underlying data.
+    ///
+    /// # Safety
+    ///
+    /// In addition to concerns noted in [`ContiguousEntryRef::as_ptr`],
+    /// this function also provides mutable access to the underlying data
+    /// allowing potential data races.
+    pub unsafe fn as_ptr_mut(&self) -> *mut T
+    where
+        T: RefSizeReq,
+    {
+        let base = ImplDefault::get_base(&self.inner.state.base);
+        let pos = base.add(self.inner.range.0);
+
+        #[cfg(not(feature = "ptr_metadata"))]
+        {
+            pos as *mut T
+        }
+        #[cfg(feature = "ptr_metadata")]
+        {
+            core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata)
+        }
+    }
+
+    /// Creates an immutable pointer to underlying data while also preventing
+    /// the occupied memory region from being marked as free.
+    ///
+    /// # Safety
+    ///
+    /// This function returns a pointer that may become invalid if the
+    /// container's memory is resized to a capacity which requires the memory
+    /// segment to be moved.
+    pub unsafe fn into_ptr(self) -> *const T
+    where
+        T: RefSizeReq,
+    {
+        self.into_ptr_mut() as *const T
+    }
+
+    /// Creates a mutable pointer to underlying data while also preventing
+    /// the occupied memory region from being marked as free.
+    ///
+    /// # Safety
+    ///
+    /// In addition to concerns noted in
+    /// [`ContiguousEntryRef::into_ptr`], this function also provides
+    /// mutable access to the underlying data allowing potential data races.
+    pub unsafe fn into_ptr_mut(self) -> *mut T
+    where
+        T: RefSizeReq,
+    {
+        let result = self.as_ptr_mut();
+        let inner: *mut ReferenceState<T, ImplDefault> = self.inner.as_ref()
+            as *const ReferenceState<T, ImplDefault>
+            as *mut ReferenceState<T, ImplDefault>;
+        std::ptr::drop_in_place(&mut (*inner).state);
+        std::mem::forget(self.inner);
+        result
+    }
 }
 
-impl<T: ?Sized> Clone for ContiguousMemoryRef<T> {
+impl<T: ?Sized> Clone for ContiguousEntryRef<T> {
     fn clone(&self) -> Self {
-        ContiguousMemoryRef {
+        ContiguousEntryRef {
             inner: self.inner.clone(),
             #[cfg(feature = "ptr_metadata")]
             metadata: self.metadata.clone(),
@@ -385,9 +513,9 @@ impl<T: ?Sized> Clone for ContiguousMemoryRef<T> {
 }
 
 #[cfg(feature = "debug")]
-impl<T: ?Sized> core::fmt::Debug for ContiguousMemoryRef<T> {
+impl<T: ?Sized> core::fmt::Debug for ContiguousEntryRef<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ContiguousMemoryRef")
+        f.debug_struct("ContiguousEntryRef")
             .field("inner", &self.inner)
             .finish()
     }
@@ -396,7 +524,7 @@ impl<T: ?Sized> core::fmt::Debug for ContiguousMemoryRef<T> {
 pub(crate) mod sealed {
     use super::*;
 
-    /// Internal state of [`ContiguousMemoryRef`] and [`SyncContiguousMemoryRef`].
+    /// Internal state of [`ContiguousEntryRef`] and [`SyncContiguousEntryRef`].
     pub struct ReferenceState<T: ?Sized, Impl: ImplDetails> {
         pub state: Impl::StorageState,
         pub range: ByteRange,

@@ -46,8 +46,7 @@ use error::ContiguousMemoryError;
 pub mod prelude {
     pub use crate::{
         error::*, range::ByteRange, refs::*, ContiguousMemory, ContiguousMemoryStorage,
-        ImplConcurrent, ImplDefault, ImplDetails, ImplUnsafe, SyncContiguousMemory,
-        UnsafeContiguousMemory,
+        ImplConcurrent, ImplDefault, ImplUnsafe, SyncContiguousMemory, UnsafeContiguousMemory,
     };
 }
 
@@ -110,17 +109,20 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// The capacity represents the size of the memory block that has been
     /// allocated for storing data. It may be larger than the amount of data
     /// currently stored within the container.
+    #[must_use]
     pub fn get_capacity(&self) -> usize {
         Impl::get_capacity(&self.capacity)
     }
 
     /// Returns the layout of the memory region containing stored data.
+    #[must_use]
     pub fn get_layout(&self) -> Layout {
         Impl::deref_state(&self.inner).layout()
     }
 
     /// Resizes the memory container to the specified `new_capacity`, optionally
-    /// returning the new base address of the stored items.
+    /// returning the new base address of the stored items - if `None` is
+    /// returned the base address of the memory block is the same.
     ///
     /// Shrinking the container is generally performed in place by freeing
     /// tailing memory space, but growing it can move the data in memory to find
@@ -131,16 +133,13 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///
     /// # Errors
     ///
-    /// This function can return the following errors:
+    /// [`ContiguousMemoryError::Unshrinkable`] error is returned when
+    /// attempting to shrink the memory container, but previously stored data
+    /// prevents the container from being shrunk to the desired capacity.
     ///
-    /// - [`ContiguousMemoryError::Unshrinkable`]: Returned when attempting to
-    ///   shrink the memory container, but the stored data prevents the
-    ///   container from being shrunk to the desired capacity.
-    ///
-    /// - [`ContiguousMemoryError::Lock`]: Returned if the mutex holding the
-    ///   base address or the [`AllocationTracker`] is poisoned.
-    ///
-    /// [`AllocationTracker`]: crate::tracker::AllocationTracker
+    /// In a concurrent implementation [`ContiguousMemoryError::Lock`] is
+    /// returned if the mutex holding the base address or the
+    /// [`AllocationTracker`](crate::tracker::AllocationTracker) is poisoned.
     pub fn resize(
         &mut self,
         new_capacity: usize,
@@ -205,10 +204,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// returned under same conditions.
     ///
     /// Unsafe implementation never fails.
-    pub fn can_store<T: StoreRequirements>(
-        &self,
-        value: &T,
-    ) -> Result<bool, ContiguousMemoryError> {
+    pub fn can_push<T: StoreRequirements>(&self, value: &T) -> Result<bool, ContiguousMemoryError> {
         let layout = Layout::for_value(&value);
         Ok(Impl::peek_next(&self.inner, layout)?.is_some())
     }
@@ -221,8 +217,8 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///
     /// Returned value is implementation specific:
     /// - For concurrent implementation it is
-    ///   `Result<SyncContiguousMemoryRef<T>, LockingError>`,
-    /// - For default implementation it is `ContiguousMemoryRef<T>`,
+    ///   `Result<SyncContiguousEntryRef<T>, LockingError>`,
+    /// - For default implementation it is `ContiguousEntryRef<T>`,
     /// - For unsafe implementation it is
     ///   `Result<*mut u8, ContiguousMemoryError>`.
     ///
@@ -244,27 +240,27 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// Memory block can still be grown by calling [`ContiguousMemory::resize`],
     /// but it can't be done automatically as that would invalidate all the
     /// existing pointers without any indication.
-    pub fn store<T: StoreRequirements>(&mut self, value: T) -> Impl::StoreResult<T> {
+    pub fn push<T: StoreRequirements>(&mut self, value: T) -> Impl::StoreResult<T> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
         let pos = &mut *data as *mut T;
-        let result = unsafe { self.store_data(pos, layout) };
+        let result = unsafe { self.push_raw(pos, layout) };
         result
     }
 
-    /// Works same as [`store`](ContiguousMemory::store) but takes a pointer and
+    /// Works same as [`store`](ContiguousMemory::push) but takes a pointer and
     /// layout.
     ///
     /// Pointer type is used to deduce the destruction behavior for
     /// implementations that return a reference, but can be disabled by casting
     /// the provided pointer into `*mut ()` type and then calling
     /// [`core::mem::transmute`] on the returned reference.
-    pub unsafe fn store_data<T: StoreRequirements>(
+    pub unsafe fn push_raw<T: StoreRequirements>(
         &mut self,
         data: *mut T,
         layout: Layout,
     ) -> Impl::StoreResult<T> {
-        Impl::store_data(&mut self.inner, data, layout)
+        Impl::push_raw(&mut self.inner, data, layout)
     }
 
     /// Assumes value is stored at the provided _relative_ `position` in
@@ -299,20 +295,43 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ) -> Impl::LockResult<Impl::ReferenceType<T>> {
         Impl::assume_stored(&self.inner, position)
     }
-}
 
-#[allow(deprecated)]
-pub use details::StoreData;
+    /// Forgets this container without dropping it.
+    ///
+    /// Calling this method will create a memory leak because the smart pointer
+    /// to state will not be dropped even when all of the created references go
+    /// out of scope. As this method takes ownership of the container, calling
+    /// it also ensures that dereferencing pointers created by
+    /// [`as_ptr`](ContiguousEntryReference::as_ptr),
+    /// [`as_ptr_mut`](ContiguousEntryReference::as_ptr_mut),
+    /// [`into_ptr`](ContiguousEntryReference::into_ptr), and
+    /// [`into_ptr_mut`](ContiguousEntryReference::into_ptr_mut)
+    /// `ContiguousEntryReference` methods is guaranteed to be safe.
+    ///
+    /// This method isn't unsafe as leaking data doesn't cause undefined
+    /// behavior.
+    /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
+    pub fn forget(self) {
+        std::mem::forget(self);
+    }
+}
 
 impl ContiguousMemoryStorage<ImplUnsafe> {
     /// Clones the allocated memory region into a new ContiguousMemoryStorage.
     ///
     /// This function isn't unsafe, even though it ignores presence of `Copy`
     /// bound on stored data, because it doesn't create any pointers.
-    pub unsafe fn copy_storage(&self) -> Self {
+    #[must_use]
+    pub fn copy_data(&self) -> Self {
         let current_layout = self.get_layout();
         let result = Self::new_from_layout(current_layout).expect("current layout should be valid");
-        core::ptr::copy_nonoverlapping(self.get_base(), result.get_base(), current_layout.size());
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self.get_base(),
+                result.get_base(),
+                current_layout.size(),
+            );
+        }
         result
     }
 
@@ -325,7 +344,6 @@ impl ContiguousMemoryStorage<ImplUnsafe> {
     /// This function is considered unsafe because it can mark a memory range
     /// as free while a valid reference is pointing to it from another place in
     /// code.
-    #[inline(always)]
     pub unsafe fn free_typed<T>(&mut self, position: *mut T) {
         Self::free(self, position, size_of::<T>())
     }
@@ -549,11 +567,11 @@ mod test {
         let value_string = "This is a test string".to_string();
         let value_byte = 0x41u8;
 
-        let stored_ref_number = memory.store(value_number);
-        let stored_ref_car_a = memory.store(car_a.clone());
-        let stored_ref_string = memory.store(value_string.clone());
-        let stored_ref_byte = memory.store(value_byte);
-        let stored_ref_car_b = memory.store(car_b.clone());
+        let stored_ref_number = memory.push(value_number);
+        let stored_ref_car_a = memory.push(car_a.clone());
+        let stored_ref_string = memory.push(value_string.clone());
+        let stored_ref_byte = memory.push(value_byte);
+        let stored_ref_car_b = memory.push(car_b.clone());
 
         assert_eq!(*stored_ref_number.get(), value_number);
         assert_eq!(*stored_ref_car_a.get(), car_a);
@@ -578,7 +596,7 @@ mod test {
             miles: 30123,
         };
 
-        let stored_car = memory.store(car_a.clone());
+        let stored_car = memory.push(car_a.clone());
 
         assert!(memory.resize(32).is_err());
         memory.resize(1024).unwrap();

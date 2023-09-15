@@ -27,27 +27,37 @@ pub enum LockingError {
         source: LockSource,
     },
     /// Not lockable because the lock would be blocking.
-    WouldBlock,
+    WouldBlock {
+        /// Specifies which mutex/lock would block.
+        source: LockSource,
+    },
 }
 
 #[cfg(any(feature = "std", feature = "error_in_core"))]
 impl Display for LockingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            LockingError::Poisoned { source: which } => match which {
-                LockSource::BaseAddress => {
-                    write!(f, "Cannot acquire lock: base address Mutex was poisoned")
+            LockingError::Poisoned { source } => write!(
+                f,
+                "Cannot acquire lock: {}",
+                match source {
+                    LockSource::BaseAddress => {
+                        "base address Mutex was poisoned"
+                    }
+                    LockSource::AllocationTracker => "AllocationTracker Mutex was poisoned",
+                    LockSource::Reference =>
+                        "reference concurrent mutable access exclusion flag Mutex was poisoned",
                 }
-                LockSource::AllocationTracker => write!(
-                    f,
-                    "Cannot acquire lock: AllocationTracker Mutex was poisoned"
-                ),
-                LockSource::Reference => write!(
-                    f,
-                    "Cannot acquire lock: reference concurrent mutable access exclusion flag Mutex was poisoned"
-                )
-            },
-            LockingError::WouldBlock => write!(f, "Lock would be block"),
+            ),
+            LockingError::WouldBlock { source } => write!(
+                f,
+                "Lock would block the current thread: {}",
+                match source {
+                    LockSource::BaseAddress => "base address already borrowed",
+                    LockSource::AllocationTracker => "AllocationTracker already borrowed",
+                    LockSource::Reference => "reference already borrowed",
+                }
+            ),
         }
     }
 }
@@ -77,19 +87,6 @@ impl From<PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>> for Lo
     }
 }
 
-#[cfg(feature = "std")]
-impl<T> From<std::sync::TryLockError<T>> for LockingError
-where
-    LockingError: From<PoisonError<T>>,
-{
-    fn from(value: std::sync::TryLockError<T>) -> Self {
-        match value {
-            std::sync::TryLockError::Poisoned(poison_err) => LockingError::from(poison_err),
-            std::sync::TryLockError::WouldBlock => LockingError::WouldBlock,
-        }
-    }
-}
-
 /// Error returned when concurrent mutable access is attempted to the same
 /// memory region.
 #[derive(Debug)]
@@ -97,12 +94,6 @@ pub struct RegionBorrowedError {
     /// [`ByteRange`] that was attempted to be borrowed.
     pub range: ByteRange,
 }
-
-#[deprecated(
-    since = "0.3.1",
-    note = "Renamed; use RegionBorrowedError"
-)]
-pub use RegionBorrowedError as RegionBorrowed;
 
 #[cfg(any(feature = "std", feature = "error_in_core"))]
 impl Display for RegionBorrowedError {

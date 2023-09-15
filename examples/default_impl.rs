@@ -11,8 +11,8 @@ fn main() {
 
     // Store data in the memory container
     let data = Data { value: 42 };
-    let stored_number: ContiguousMemoryRef<u64> = memory.store(22u64);
-    let stored_data: ContiguousMemoryRef<Data> = memory.store(data);
+    let stored_number: ContiguousEntryRef<u64> = memory.push(22u64);
+    let stored_data: ContiguousEntryRef<Data> = memory.push(data);
 
     // Retrieve and use the stored data
     assert_eq!(*stored_data.get(), data);

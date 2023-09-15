@@ -16,15 +16,9 @@ jobs:
       - run: rustup update nightly && rustup default nightly
       - name: Build default
         run: cargo build --verbose
-      - name: Build no_std
-        run: cargo build --verbose --no-default-features --features no_std
-      - name: Build no_std with error_in_core
-        run: cargo build --verbose --no-default-features --features no_std,error_in_core
-      - name: Build with ptr_metadata
-        run: cargo build --verbose --features ptr_metadata
-      - name: Build restrictive
-        run: cargo build --verbose --no-default-features --features std
+      - name: Build no_std all features
+        run: cargo build --verbose --no-default-features --features no_std,debug,ptr_metadata,error_in_core
       - name: Build all features
-        run: cargo build --verbose --all-features
+        run: cargo build --verbose --no-default-features --features std,debug,ptr_metadata,error_in_core
       - name: Run tests
         run: cargo test --verbose --features ptr_metadata

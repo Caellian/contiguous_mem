@@ -116,7 +116,7 @@ impl AllocationTracker {
             it.len() >= layout.size() && it.aligned(layout.align()).len() >= layout.size()
         })?;
 
-        let usable = available.aligned(layout.align()).cap_size(layout.size())?;
+        let usable = available.aligned(layout.align()).cap_size(layout.size());
 
         Some(usable)
     }
@@ -162,7 +162,11 @@ impl AllocationTracker {
     /// On success, it returns a [`ByteRange`] of the memory region that was
     /// taken, or a [`ContiguousMemoryError::NoStorageLeft`] error if the
     /// requested `layout` cannot be placed within any free regions.
-    pub fn take_next(&mut self, layout: Layout) -> Result<ByteRange, ContiguousMemoryError> {
+    pub fn take_next(
+        &mut self,
+        base_address: usize,
+        layout: Layout,
+    ) -> Result<ByteRange, ContiguousMemoryError> {
         if layout.size() > self.size {
             return Err(ContiguousMemoryError::NoStorageLeft);
         }
@@ -172,14 +176,20 @@ impl AllocationTracker {
             .iter()
             .enumerate()
             .find(|(_, it)| {
-                it.len() >= layout.size() && it.aligned(layout.align()).len() >= layout.size()
+                if it.len() < layout.size() {
+                    return false;
+                }
+
+                let aligned = it
+                    .offset(base_address)
+                    .aligned(layout.align())
+                    .cap_end(base_address + self.len());
+
+                aligned.len() >= layout.size()
             })
             .ok_or(ContiguousMemoryError::NoStorageLeft)?;
 
-        let taken = available
-            .aligned(layout.align())
-            .cap_size(layout.size())
-            .ok_or(ContiguousMemoryError::NoStorageLeft)?;
+        let taken = available.aligned(layout.align()).cap_size(layout.size());
 
         let (left, right) = available.difference_unchecked(taken);
 
@@ -264,7 +274,7 @@ mod tests {
         let mut tracker = AllocationTracker::new(1024);
 
         let range = tracker
-            .take_next(Layout::from_size_align(32, 8).unwrap())
+            .take_next(0, Layout::from_size_align(32, 8).unwrap())
             .unwrap();
         assert_eq!(range, ByteRange(0, 32));
 
@@ -288,7 +298,7 @@ mod tests {
         let mut tracker = AllocationTracker::new(1024);
 
         let layout = Layout::from_size_align(128, 8).unwrap();
-        let range = tracker.take_next(layout).unwrap();
+        let range = tracker.take_next(0, layout).unwrap();
         assert_eq!(range, ByteRange(0, 128));
     }
 }

@@ -13,10 +13,10 @@ fn main() {
     let data = Data { value: 42 };
 
     let stored_number: *mut u64 = memory
-        .store(22u64)
+        .push(22u64)
         .expect("there should be enough space to store a number");
     let stored_data: *mut Data = memory
-        .store(data)
+        .push(data)
         .expect("there should be enough space to store Data");
 
     // Retrieve and use the stored data

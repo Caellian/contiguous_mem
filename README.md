@@ -1,11 +1,21 @@
 # contiguous_mem
 
 contiguous_mem streamlines storage and management of data stored in contiguous
-memory block.
+blocks of memory.
 
-[![CI](https://github.com/Caellian/contiguous_mem/actions/workflows/rust.yml/badge.svg)](https://github.com/Caellian/contiguous_mem/actions/workflows/rust.yml)
-[![Crates.io](https://img.shields.io/crates/v/contiguous_mem)](https://crates.io/crates/contiguous_mem)
-[![Documentation](https://docs.rs/contiguous_mem/badge.svg)](https://docs.rs/contiguous_mem)
+[![Crate](https://img.shields.io/crates/v/contiguous_mem?style=for-the-badge&logo=docs.rs)](https://crates.io/crates/contiguous_mem)
+[![Documentation](https://img.shields.io/docsrs/contiguous-mem?style=for-the-badge&logo=rust)](https://docs.rs/contiguous-mem)
+[![CI Status](https://img.shields.io/github/actions/workflow/status/Caellian/contiguous_mem/rust.yml?style=for-the-badge&logo=githubactions&logoColor=%23fff&label=CI)](https://github.com/Caellian/contiguous_mem/actions/workflows/rust.yml)
+[![Zlib or MIT or Apache 2.0 license](https://img.shields.io/crates/l/contiguous-mem?style=for-the-badge)](https://github.com/Caellian/contiguous_mem#license)
+
+## Stability
+
+All versions prior to 1.0.0 are not considered production ready. This is my
+first crate and there's still a lot of edge cases I didn't get a chance to
+consider yet.
+
+Prelimenary tests are in place but I don't consider them sufficient to guarantee
+correctness of behavior.
 
 ## Key Features
 
@@ -23,18 +33,18 @@ safely wrapping referenced data if you don't need it.
 Default implementation keeps relative offsets of stored data which are resolved
 on access.
 
+## Use cases
+
+- Ensuring stored data is placed adjacently in memory. ([example](./examples/game_loading.rs))
+- Storing differently typed/sized data. ([example](./examples/default_impl.rs))
+
 ## Tradeoffs
 
-- Works without nightly but leaks data, enable `ptr_metadata` or disable default
-  `leak_data` feature flag if memory leaks are an issue:
-
+- Works without nightly but leaks data requiring Drop or drop glue, enable
+  `ptr_metadata` or disable default `leak_data` feature flag if memory leaks are
+  an issue:
   - `ptr_metadata` requires nightly,
   - disabling `leak_data` imposes `Copy` requirement on stored types.
-
-- References returned by `store` function follow the same borrow restrictions as the
-  language, `Deref` is implemented for `ContiguousMemoryRef` but it will panic on
-  dereference if it's been already mutably borrowed somewhere else.
-  Use `ContiguousMemoryRef::try_get` if you'd like to handle that properly.
 
 ## Getting Started
 
@@ -42,14 +52,14 @@ Add the crate to your dependencies:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.3.0" }
+contiguous_mem = { version = "0.4.*" }
 ```
 
 Optionally disable the `std` feature and enable `no_std` feature to use in `no_std` environment:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.3.0", default-features = false, features = ["no_std"] }
+contiguous_mem = { version = "0.4.*", default-features = false, features = ["no_std"] }
 ```
 
 ### Features
@@ -59,10 +69,13 @@ contiguous_mem = { version = "0.3.0", default-features = false, features = ["no_
 - `leak_data` (**default**) - disables `Copy` requirement for stored types, but any
   references in stored data will be leaked when the memory container is dropped
 - `debug` - enables `derive(Debug)` on structures unrelated to error handling
-- `ptr_metadata` &lt;_nightly_&gt; - enables support for casting returned references
-  into `dyn Trait` types as well as cleaning up any types that implement `Drop`
-  or generate drop glue
-- `error_in_core` &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std` environment
+- [`ptr_metadata`](https://doc.rust-lang.org/beta/unstable-book/library-features/ptr-metadata.html)
+  &lt;_nightly_&gt; - enables support for casting returned references into
+  `dyn Trait` types as well as cleaning up any types that implement `Drop` or
+  generate drop glue
+- [`error_in_core`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/error-in-core.html)
+  &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std`
+  environment
 
 ### Usage
 
@@ -80,8 +93,8 @@ fn main() {
 
     // Store data in the memory container
     let data = Data { value: 42 };
-    let stored_number: ContiguousMemoryRef<u64> = memory.store(22u64);
-    let stored_data: ContiguousMemoryRef<Data> = memory.store(data);
+    let stored_number: ContiguousMemoryRef<u64> = memory.push(22u64);
+    let stored_data: ContiguousMemoryRef<Data> = memory.push(data);
 
     // Retrieve and use the stored data
     assert_eq!(*stored_data.get(), data);
@@ -89,8 +102,24 @@ fn main() {
 }
 ```
 
+- References have a similar API as
+  [`RefCell`](https://doc.rust-lang.org/stable/std/cell/struct.RefCell.html)
+
 <cite>Note that reference types returned by store are inferred and only shown
 here for demonstration purposes.</cite>
+
+## Alternatives
+
+- manually managing memory to ensure contiguous placement of data
+  - prone to errors and requires unsafe code
+- using a custom allocator like
+  [blink-alloc](https://crates.io/crates/blink-alloc) to ensure contiguous
+  placement of data
+  - requires [`allocator_api`](https://doc.rust-lang.org/beta/unstable-book/library-features/allocator-api.html)
+    feature
+  - `blink-alloc` provides a similar functionality as this crate without the
+    `allocator_api` feature; intended for use in loops so it doesn't support
+    freeing _some_ values while retaining other
 
 ## Contributions
 
