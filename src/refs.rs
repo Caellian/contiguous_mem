@@ -269,7 +269,7 @@ impl<T: ?Sized> Clone for SyncContiguousEntryRef<T> {
         SyncContiguousEntryRef {
             inner: self.inner.clone(),
             #[cfg(feature = "ptr_metadata")]
-            metadata: self.metadata.clone(),
+            metadata: self.metadata,
             #[cfg(not(feature = "ptr_metadata"))]
             _phantom: PhantomData,
         }
@@ -500,7 +500,7 @@ impl<T: ?Sized> Clone for ContiguousEntryRef<T> {
         ContiguousEntryRef {
             inner: self.inner.clone(),
             #[cfg(feature = "ptr_metadata")]
-            metadata: self.metadata.clone(),
+            metadata: self.metadata,
             #[cfg(not(feature = "ptr_metadata"))]
             _phantom: PhantomData,
         }

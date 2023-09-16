@@ -3,7 +3,7 @@
 use core::{alloc::Layout, cmp::Ordering};
 
 #[cfg(feature = "no_std")]
-use crate::types::Vec;
+use crate::types::{vec, Vec};
 use crate::{error::ContiguousMemoryError, range::ByteRange};
 
 /// A structure that keeps track of unused regions of memory within provided

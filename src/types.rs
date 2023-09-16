@@ -22,6 +22,7 @@ mod nostd_imports {
 
     pub use alloc::alloc as allocator;
 
+    pub use ::alloc::vec;
     pub use ::alloc::vec::Vec;
 
     pub use ::alloc::rc::Rc;
