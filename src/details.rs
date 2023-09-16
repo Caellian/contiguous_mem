@@ -142,7 +142,7 @@ pub trait StorageDetails: ImplBase {
 
     /// Shrinks tracked area of the allocation tracker to smallest that can fit
     /// currently stored data.
-    fn shrink_tracker(state: &mut Self::StorageState) -> Result<Option<usize>, LockingError>;
+    fn shrink_tracker(state: &mut Self::StorageState) -> Self::LockResult<Option<usize>>;
 
     /// Finds the next free memory region for given layout in the tracker.
     fn track_next(
@@ -314,11 +314,15 @@ impl StorageDetails for ImplDefault {
         state: &mut Self::StorageState,
         new_capacity: usize,
     ) -> Result<(), ContiguousMemoryError> {
-        state.tracker.borrow_mut().resize(new_capacity)
+        state
+            .tracker
+            .try_borrow_mut()
+            .map_err(|_| ContiguousMemoryError::TrackerInUse)?
+            .resize(new_capacity)
     }
 
-    fn shrink_tracker(state: &mut Self::StorageState) -> Result<Option<usize>, LockingError> {
-        Ok(state.tracker.borrow_mut().shrink_to_fit())
+    fn shrink_tracker(state: &mut Self::StorageState) -> Option<usize> {
+        state.tracker.borrow_mut().shrink_to_fit()
     }
 
     fn track_next(
@@ -409,8 +413,8 @@ impl StorageDetails for ImplUnsafe {
         state.tracker.resize(new_capacity)
     }
 
-    fn shrink_tracker(state: &mut Self::StorageState) -> Result<Option<usize>, LockingError> {
-        Ok(state.tracker.shrink_to_fit())
+    fn shrink_tracker(state: &mut Self::StorageState) -> Option<usize> {
+        state.tracker.shrink_to_fit()
     }
 
     fn track_next(

@@ -36,7 +36,7 @@ use core::{
     ops::Deref,
 };
 
-use error::ContiguousMemoryError;
+use error::{ContiguousMemoryError, LockingError};
 
 /// A memory container for efficient allocation and storage of contiguous data.
 ///
@@ -150,14 +150,6 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         Ok(moved)
     }
 
-    /// Shrinks the allocated memory to fit the currently stored data.
-    pub fn shrink_to_fit(&mut self) -> Result<(), ContiguousMemoryError> {
-        if let Some(shrunk) = Impl::shrink_tracker(&mut self.inner)? {
-            self.resize(shrunk)?;
-        }
-        Ok(())
-    }
-
     /// Returns `true` if the provided value can be stored without growing the
     /// container.
     ///
@@ -172,8 +164,8 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// let mut storage = UnsafeContiguousMemory::new(0);
     /// let value = [2, 4, 8, 16];
     ///
-    /// # assert_eq!(storage.can_push(&value).unwrap(), false);
-    /// if !storage.can_push(&value).unwrap() {
+    /// # assert_eq!(storage.can_push::<Vec<i32>>().unwrap(), false);
+    /// if !storage.can_push::<Vec<i32>>().unwrap() {
     ///     storage.resize(storage.get_capacity() + size_of_val(&value));
     ///
     ///     // ...update old pointers...
@@ -192,8 +184,8 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// returned under same conditions.
     ///
     /// Unsafe implementation never fails.
-    pub fn can_push<T: StoreRequirements>(&self, value: &T) -> Result<bool, ContiguousMemoryError> {
-        let layout = Layout::for_value(&value);
+    pub fn can_push<T: StoreRequirements>(&self) -> Result<bool, ContiguousMemoryError> {
+        let layout = Layout::new::<T>();
         Ok(Impl::peek_next(&self.inner, layout)?.is_some())
     }
 
@@ -320,7 +312,44 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     }
 }
 
+impl ContiguousMemoryStorage<ImplDefault> {
+    /// Shrinks the allocated memory to fit the currently stored data and
+    /// returns the new capacity.
+    pub fn shrink_to_fit(&mut self) -> usize {
+        if let Some(shrunk) = ImplDefault::shrink_tracker(&mut self.inner) {
+            self.resize(shrunk).expect("unable to shrink container");
+            shrunk
+        } else {
+            self.capacity.get()
+        }
+    }
+}
+
+impl ContiguousMemoryStorage<ImplConcurrent> {
+    /// Shrinks the allocated memory to fit the currently stored data and
+    /// returns the new capacity.
+    pub fn shrink_to_fit(&mut self) -> Result<usize, LockingError> {
+        if let Some(shrunk) = ImplConcurrent::shrink_tracker(&mut self.inner)? {
+            self.resize(shrunk).expect("unable to shrink container");
+            return Ok(shrunk);
+        } else {
+            Ok(self.get_capacity())
+        }
+    }
+}
+
 impl ContiguousMemoryStorage<ImplUnsafe> {
+    /// Shrinks the allocated memory to fit the currently stored data and
+    /// returns the new capacity.
+    pub fn shrink_to_fit(&mut self) -> usize {
+        if let Some(shrunk) = ImplUnsafe::shrink_tracker(&mut self.inner) {
+            self.resize(shrunk).expect("unable to shrink container");
+            shrunk
+        } else {
+            self.capacity
+        }
+    }
+
     /// Clones the allocated memory region into a new ContiguousMemoryStorage.
     ///
     /// This function isn't unsafe, even though it ignores presence of `Copy`
@@ -532,13 +561,13 @@ mod test {
     }
 
     #[test]
-    fn test_new_contiguous_memory() {
+    fn construct_contiguous_memory() {
         let memory = ContiguousMemory::new(1024);
         assert_eq!(memory.get_capacity(), 1024);
     }
 
     #[test]
-    fn test_store_and_get_contiguous_memory() {
+    fn store_and_get() {
         let mut memory = ContiguousMemory::new(1024);
 
         let person_a = Person {
@@ -583,7 +612,7 @@ mod test {
     }
 
     #[test]
-    fn test_resize_contiguous_memory() {
+    fn resize_manually() {
         let mut memory = ContiguousMemory::new(512);
 
         let person_a = Person {
@@ -610,5 +639,44 @@ mod test {
         assert_eq!(memory.get_capacity(), 128);
 
         assert_eq!(*stored_car.get(), car_a);
+    }
+
+    #[test]
+    fn resize_automatically() {
+        let mut memory = ContiguousMemory::new(144);
+
+        memory.push(Person {
+            name: "Jacky".to_string(),
+            last_name: "Larsson".to_string(),
+        });
+        memory.push(Person {
+            name: "Jacky".to_string(),
+            last_name: "Larsson".to_string(),
+        });
+        memory.push(Person {
+            name: "Jacky".to_string(),
+            last_name: "Larsson".to_string(),
+        });
+        assert_eq!(memory.can_push::<Person>().unwrap(), false);
+
+        assert_eq!(memory.get_capacity(), 288);
+
+        // 144
+        //192
+    }
+
+    #[test]
+    fn add_to_zero_sized() {
+        let mut memory = ContiguousMemory::new(0);
+
+        let person = Person {
+            name: "Jacky".to_string(),
+            last_name: "Larsson".to_string(),
+        };
+
+        let stored_person = memory.push(person.clone());
+
+        assert_eq!(memory.get_capacity(), 48);
+        assert_eq!(*stored_person.get(), person);
     }
 }
