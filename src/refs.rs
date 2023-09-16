@@ -40,7 +40,7 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     ///
     /// If the data is mutably accessed, this method will block the current
     /// thread until it becomes available.
-    pub fn get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplConcurrent>, LockingError>
+    pub fn get(&self) -> Result<MemoryReadGuard<'_, T, ImplConcurrent>, LockingError>
     where
         T: RefSizeReq,
     {
@@ -68,7 +68,7 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     /// If the data is mutably accessed, this method returns a
     /// [`LockingError::WouldBlock`](crate::error::LockingError::WouldBlock)
     /// error.
-    pub fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplConcurrent>, LockingError>
+    pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplConcurrent>, LockingError>
     where
         T: RefSizeReq,
     {
@@ -96,9 +96,7 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     /// [`LockingError::Poisoned`] error if the Mutex holding the base address
     /// pointer or the Mutex holding concurrent mutable access flag has been
     /// poisoned.
-    pub fn get_mut<'a>(
-        &'a mut self,
-    ) -> Result<MemoryWriteGuard<'a, T, ImplConcurrent>, LockingError>
+    pub fn get_mut(&mut self) -> Result<MemoryWriteGuard<'_, T, ImplConcurrent>, LockingError>
     where
         T: RefSizeReq,
     {
@@ -130,9 +128,7 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     ///
     /// - [`LockingError::WouldBlock`] error if accessing referenced data chunk
     ///   would be blocking.
-    pub fn try_get_mut<'a>(
-        &'a mut self,
-    ) -> Result<MemoryWriteGuard<'a, T, ImplConcurrent>, LockingError>
+    pub fn try_get_mut(&mut self) -> Result<MemoryWriteGuard<'_, T, ImplConcurrent>, LockingError>
     where
         T: RefSizeReq,
     {
@@ -310,7 +306,7 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
 
     /// Returns a reference to data at its current location and panics if the
     /// represented memory region is mutably borrowed.
-    pub fn get<'a>(&'a self) -> MemoryReadGuard<'a, T, ImplDefault>
+    pub fn get(&self) -> MemoryReadGuard<'_, T, ImplDefault>
     where
         T: RefSizeReq,
     {
@@ -320,7 +316,7 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
     /// Returns a reference to data at its current location or a
     /// [`RegionBorrowedError`] error if the represented memory region is
     /// mutably borrowed.
-    pub fn try_get<'a>(&'a self) -> Result<MemoryReadGuard<'a, T, ImplDefault>, RegionBorrowedError>
+    pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplDefault>, RegionBorrowedError>
     where
         T: RefSizeReq,
     {
@@ -350,7 +346,7 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
 
     /// Returns a mutable reference to data at its current location and panics
     /// if the reference has already been borrowed.
-    pub fn get_mut<'a>(&'a mut self) -> MemoryWriteGuard<'a, T, ImplDefault>
+    pub fn get_mut(&mut self) -> MemoryWriteGuard<'_, T, ImplDefault>
     where
         T: RefSizeReq,
     {
@@ -360,9 +356,9 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
     /// Returns a mutable reference to data at its current location or a
     /// [`RegionBorrowedError`] error if the represented memory region is
     /// already borrowed.
-    pub fn try_get_mut<'a>(
-        &'a mut self,
-    ) -> Result<MemoryWriteGuard<'a, T, ImplDefault>, RegionBorrowedError>
+    pub fn try_get_mut(
+        &mut self,
+    ) -> Result<MemoryWriteGuard<'_, T, ImplDefault>, RegionBorrowedError>
     where
         T: RefSizeReq,
     {

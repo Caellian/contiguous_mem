@@ -1,8 +1,8 @@
 #![doc(hidden)]
 
-use core::alloc::Layout;
+use core::{alloc::Layout, cmp::Ordering};
 
-#[cfg(any(feature = "no_std"))]
+#[cfg(feature = "no_std")]
 use crate::types::Vec;
 use crate::{error::ContiguousMemoryError, range::ByteRange};
 
@@ -17,11 +17,9 @@ pub struct AllocationTracker {
 impl AllocationTracker {
     /// Constructs a new `AllocationTracker` of the provided `size`.
     pub fn new(size: usize) -> Self {
-        let mut initial = Vec::new();
-        initial.push(ByteRange(0, size));
         AllocationTracker {
             size,
-            unused: initial,
+            unused: vec![ByteRange(0, size)],
         }
     }
 
@@ -45,44 +43,46 @@ impl AllocationTracker {
     /// error if the represented memory range cannot be shrunk enough to fit
     /// the desired size.
     pub fn resize(&mut self, new_size: usize) -> Result<(), ContiguousMemoryError> {
-        if new_size == self.size {
-            return Ok(());
-        } else if new_size < self.size {
-            let last = self
-                .unused
-                .last_mut()
-                .ok_or(ContiguousMemoryError::Unshrinkable {
-                    required_size: self.size,
-                })?;
+        match new_size.cmp(&self.size) {
+            Ordering::Equal => {}
+            Ordering::Less => {
+                let last = self
+                    .unused
+                    .last_mut()
+                    .ok_or(ContiguousMemoryError::Unshrinkable {
+                        required_size: self.size,
+                    })?;
 
-            let reduction = self.size - new_size;
-            if last.len() < reduction {
-                return Err(ContiguousMemoryError::Unshrinkable {
-                    required_size: self.size - last.len(),
-                });
+                let reduction = self.size - new_size;
+                if last.len() < reduction {
+                    return Err(ContiguousMemoryError::Unshrinkable {
+                        required_size: self.size - last.len(),
+                    });
+                }
+                last.1 -= reduction;
+                self.size = new_size;
             }
-            last.1 -= reduction;
-            self.size = new_size;
-        } else {
-            match self.unused.last() {
-                Some(it) => {
-                    // check whether the last free region ends at the end of
-                    // tracked region
-                    if it.1 == self.size {
-                        let last = self
-                            .unused
-                            .last_mut()
-                            .expect("free byte ranges isn't empty");
-                        last.1 = new_size;
-                    } else {
+            Ordering::Greater => {
+                match self.unused.last() {
+                    Some(it) => {
+                        // check whether the last free region ends at the end of
+                        // tracked region
+                        if it.1 == self.size {
+                            let last = self
+                                .unused
+                                .last_mut()
+                                .expect("free byte ranges isn't empty");
+                            last.1 = new_size;
+                        } else {
+                            self.unused.push(ByteRange(self.size, new_size));
+                        }
+                    }
+                    None => {
                         self.unused.push(ByteRange(self.size, new_size));
                     }
                 }
-                None => {
-                    self.unused.push(ByteRange(self.size, new_size));
-                }
+                self.size = new_size;
             }
-            self.size = new_size;
         }
         Ok(())
     }
@@ -142,12 +142,12 @@ impl AllocationTracker {
 
         let (left, right) = found.difference_unchecked(region);
 
-        if left.len() > 0 {
+        if !left.is_empty() {
             self.unused[i] = left;
-            if right.len() > 0 {
+            if !right.is_empty() {
                 self.unused.insert(i + 1, right);
             }
-        } else if right.len() > 0 {
+        } else if !right.is_empty() {
             self.unused[i] = right;
         } else {
             self.unused.remove(i);
@@ -193,12 +193,12 @@ impl AllocationTracker {
 
         let (left, right) = available.difference_unchecked(taken);
 
-        if left.len() > 0 {
+        if !left.is_empty() {
             self.unused[i] = left;
-            if right.len() > 0 {
+            if !right.is_empty() {
                 self.unused.insert(i + 1, right);
             }
-        } else if right.len() > 0 {
+        } else if !right.is_empty() {
             self.unused[i] = right;
         } else {
             self.unused.remove(i);
@@ -224,12 +224,10 @@ impl AllocationTracker {
                 return Err(ContiguousMemoryError::DoubleFree);
             }
             found.merge_in_unchecked(region);
+        } else if let Some((i, _)) = self.unused.iter().enumerate().find(|it| it.0 > region.0) {
+            self.unused.insert(i, region);
         } else {
-            if let Some((i, _)) = self.unused.iter().enumerate().find(|it| it.0 > region.0) {
-                self.unused.insert(i, region);
-            } else {
-                self.unused.push(region);
-            }
+            self.unused.push(region);
         }
 
         Ok(())

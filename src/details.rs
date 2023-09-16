@@ -180,7 +180,7 @@ impl StorageDetails for ImplConcurrent {
     }
 
     fn deref_state(state: &Self::StorageState) -> &ContiguousMemoryState<Self> {
-        &state
+        state
     }
 
     fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
@@ -274,7 +274,7 @@ impl StorageDetails for ImplDefault {
     }
 
     fn deref_state(state: &Self::StorageState) -> &ContiguousMemoryState<Self> {
-        &state
+        state
     }
 
     fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
@@ -370,7 +370,7 @@ impl StorageDetails for ImplUnsafe {
     }
 
     fn deref_state(state: &Self::StorageState) -> &ContiguousMemoryState<Self> {
-        &state
+        state
     }
 
     fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
@@ -488,7 +488,7 @@ impl ReferenceDetails for ImplConcurrent {
         SyncContiguousEntryRef {
             inner: Arc::new(ReferenceState {
                 state: state.clone(),
-                range: range.clone(),
+                range,
                 borrow_kind: RwLock::new(()),
                 #[cfg(feature = "ptr_metadata")]
                 drop_metadata: static_metadata::<T, dyn HandleDrop>(),
@@ -527,7 +527,7 @@ impl ReferenceDetails for ImplDefault {
         ContiguousEntryRef {
             inner: Rc::new(ReferenceState {
                 state: state.clone(),
-                range: range.clone(),
+                range,
                 borrow_kind: Cell::new(BorrowState::Read(0)),
                 #[cfg(feature = "ptr_metadata")]
                 drop_metadata: static_metadata::<T, dyn HandleDrop>(),
@@ -706,19 +706,18 @@ impl StoreDataDetails for ImplUnsafe {
         data: *const T,
         layout: Layout,
     ) -> Result<*mut T, ContiguousMemoryError> {
-        let (addr, range) = loop {
-            match ImplUnsafe::track_next(state, layout) {
-                Ok(taken) => {
-                    let found = (taken.0
-                        + ImplUnsafe::get_base(&ImplUnsafe::deref_state(state).base) as usize)
-                        as *mut u8;
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
-                    }
-                    break (found, taken);
+        let (addr, range) = match ImplUnsafe::track_next(state, layout) {
+            Ok(taken) => {
+                let found = (taken.0
+                    + ImplUnsafe::get_base(&ImplUnsafe::deref_state(state).base) as usize)
+                    as *mut u8;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
                 }
-                Err(other) => return Err(other),
+                
+                (found, taken)
             }
+            Err(other) => return Err(other),
         };
 
         Ok(ImplUnsafe::build_ref(state, addr as *mut T, range))

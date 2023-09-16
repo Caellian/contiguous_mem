@@ -1,6 +1,6 @@
 //! Errors produced by the crate.
 
-#[cfg(all(feature = "error_in_core"))]
+#[cfg(feature = "error_in_core")]
 use core::error::Error;
 #[cfg(all(not(feature = "error_in_core"), not(feature = "no_std")))]
 use std::error::Error;

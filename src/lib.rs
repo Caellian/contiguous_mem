@@ -225,8 +225,8 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
         let pos = &mut *data as *mut T;
-        let result = unsafe { self.push_raw(pos, layout) };
-        result
+
+        unsafe { self.push_raw(pos, layout) }
     }
 
     /// Works same as [`store`](ContiguousMemory::push) but takes a pointer and
@@ -249,6 +249,15 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///     mem::transmute(storage.push_raw(erased, layout))
     /// };
     /// ```
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it clones memory from provided pointer
+    /// which means it could cause a segmentation fault if the pointer is
+    /// invalid.
+    ///
+    /// Further, it also allows escaping type drop glue because it takes type
+    /// [`Layout`] as a separate argument.
     pub unsafe fn push_raw<T: StoreRequirements>(
         &mut self,
         data: *const T,
@@ -331,7 +340,7 @@ impl ContiguousMemoryStorage<ImplConcurrent> {
     pub fn shrink_to_fit(&mut self) -> Result<usize, LockingError> {
         if let Some(shrunk) = ImplConcurrent::shrink_tracker(&mut self.inner)? {
             self.resize(shrunk).expect("unable to shrink container");
-            return Ok(shrunk);
+            Ok(shrunk)
         } else {
             Ok(self.get_capacity())
         }
@@ -504,7 +513,7 @@ pub(crate) mod sealed {
     impl<Impl: StorageDetails> Drop for ContiguousMemoryState<Impl> {
         fn drop(&mut self) {
             let layout = self.layout();
-            Impl::deallocate(&mut self.base.0, layout)
+            Impl::deallocate(&self.base.0, layout)
         }
     }
 }

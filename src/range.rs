@@ -65,6 +65,11 @@ impl ByteRange {
         self.1 - self.0
     }
 
+    /// Returns true if this byte range is zero-sized.
+    pub fn is_empty(&self) -> bool {
+        self.0 == self.1
+    }
+
     /// Returns `true` if this byte range contains another byte range `other`.
     pub fn contains(&self, other: Self) -> bool {
         self.0 <= other.0 && other.1 <= self.1
