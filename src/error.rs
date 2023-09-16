@@ -156,11 +156,10 @@ pub enum ContiguousMemoryError {
 pub enum LockSource {
     /// Mutex containing the base memory offset was poisoned.
     BaseAddress,
-    /// [`AllocationTracker`](crate::tracker::AllocationTracker) mutex was
-    /// poisoned.
+    /// `AllocationTracker` mutex was poisoned.
     AllocationTracker,
-    /// Concurrent mutable access exclusion flag in
-    /// [`ReferenceState`](crate::refs) was poisoned.
+    /// Concurrent mutable access exclusion flag in `ReferenceState` was
+    /// poisoned.
     Reference,
 }
 

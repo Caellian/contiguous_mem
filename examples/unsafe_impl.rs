@@ -1,4 +1,4 @@
-use contiguous_mem::prelude::*;
+use contiguous_mem::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Data {

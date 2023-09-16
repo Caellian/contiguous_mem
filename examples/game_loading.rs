@@ -4,7 +4,7 @@ use std::{
 };
 
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
-use contiguous_mem::prelude::*;
+use contiguous_mem::*;
 
 pub enum IndexOrPtr<T> {
     Index(u32),

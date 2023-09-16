@@ -17,9 +17,7 @@ compile_error!(
     "contiguous_mem: please enable 'no_std' feature to enable 'no_std' dependencies, or the default 'std' feature"
 );
 
-pub(crate) mod details;
-pub use details::{ImplConcurrent, ImplDefault, ImplDetails, ImplUnsafe};
-
+mod details;
 pub mod error;
 pub mod range;
 pub mod refs;
@@ -27,12 +25,10 @@ pub mod tracker;
 mod types;
 
 use details::*;
-#[doc(inline)]
-pub use range::ByteRange;
+pub use details::{ImplConcurrent, ImplDefault, ImplUnsafe};
+use range::ByteRange;
+pub use refs::{CERef, ContiguousEntryRef, SCERef, SyncContiguousEntryRef};
 use types::*;
-
-#[doc(inline)]
-pub use tracker::AllocationTracker;
 
 use core::{
     alloc::{Layout, LayoutError},
@@ -41,14 +37,6 @@ use core::{
 };
 
 use error::ContiguousMemoryError;
-
-/// Re-exports commonly used types.
-pub mod prelude {
-    pub use crate::{
-        error::*, range::ByteRange, refs::*, ContiguousMemory, ContiguousMemoryStorage,
-        ImplConcurrent, ImplDefault, ImplUnsafe, SyncContiguousMemory, UnsafeContiguousMemory,
-    };
-}
 
 /// A memory container for efficient allocation and storage of contiguous data.
 ///
@@ -62,7 +50,7 @@ pub mod prelude {
 /// Note that this structure is a smart abstraction over underlying data,
 /// copying it creates a copy which represents the same internal state. If you
 /// need to copy the memory region into a new container see:
-/// [`ContiguousMemoryStorage::copy_storage`]
+/// [`ContiguousMemoryStorage::copy_data`]
 pub struct ContiguousMemoryStorage<Impl: ImplDetails = ImplDefault> {
     inner: Impl::StorageState,
 }
@@ -197,7 +185,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///
     /// # Errors
     ///
-    /// If the [`AllocationTracker`] can't be immutably accesed, a
+    /// If the `AllocationTracker` can't be immutably accesed, a
     /// [`ContiguousMemoryError::TrackerInUse`] error is returned.
     ///
     /// For concurrent implementation a [`ContiguousMemoryError::Lock`] is
@@ -216,11 +204,12 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// reference dropping behavior.
     ///
     /// Returned value is implementation specific:
-    /// - For concurrent implementation it is
-    ///   `Result<SyncContiguousEntryRef<T>, LockingError>`,
-    /// - For default implementation it is `ContiguousEntryRef<T>`,
-    /// - For unsafe implementation it is
-    ///   `Result<*mut u8, ContiguousMemoryError>`.
+    ///
+    /// |Implementation | Result | Alias |
+    /// |-|:-:|:-:|
+    /// |[Default](ImplDefault)|[`ContiguousEntryRef<T>`](refs::ContiguousEntryRef)|[`CERef`](refs::CERef)|
+    /// |[Concurrent](ImplConcurrent)|[`SyncContiguousEntryRef<T>`](refs::SyncContiguousEntryRef)|[`SCERef`](refs::SCERef)|
+    /// |[Unsafe](ImplUnsafe)|`*mut T`|_N/A_|
     ///
     /// # Errors
     ///
@@ -228,7 +217,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///
     /// Concurrent implementation returns a
     /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
-    /// when the [`AllocationTracker`] associated with the memory container is
+    /// when the `AllocationTracker` associated with the memory container is
     /// poisoned.
     ///
     /// ## Unsafe implementation
@@ -253,11 +242,24 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///
     /// Pointer type is used to deduce the destruction behavior for
     /// implementations that return a reference, but can be disabled by casting
-    /// the provided pointer into `*mut ()` type and then calling
-    /// [`core::mem::transmute`] on the returned reference.
+    /// the provided pointer into `*const ()` type and then calling
+    /// [`transmute`](core::mem::transmute) on the returned reference:
+    /// ```rust
+    /// # use contiguous_mem::{ContiguousMemory, CERef};
+    /// # use core::alloc::Layout;
+    /// # use core::mem;
+    /// # let mut storage = ContiguousMemory::new(0);
+    /// let value = vec!["ignore", "drop", "for", "me"];
+    /// let erased = &value as *const Vec<&str> as *const ();
+    /// let layout = Layout::new::<Vec<&str>>();
+    ///
+    /// let stored: CERef<Vec<&str>> = unsafe {
+    ///     mem::transmute(storage.push_raw(erased, layout))
+    /// };
+    /// ```
     pub unsafe fn push_raw<T: StoreRequirements>(
         &mut self,
-        data: *mut T,
+        data: *const T,
         layout: Layout,
     ) -> Impl::PushResult<T> {
         Impl::push_raw(&mut self.inner, data, layout)
@@ -296,23 +298,25 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         Impl::assume_stored(&self.inner, position)
     }
 
-    /// Forgets this container without dropping it.
+    /// Forgets this container without dropping it and returns the base address.
     ///
     /// Calling this method will create a memory leak because the smart pointer
     /// to state will not be dropped even when all of the created references go
     /// out of scope. As this method takes ownership of the container, calling
     /// it also ensures that dereferencing pointers created by
-    /// [`as_ptr`](ContiguousEntryReference::as_ptr),
-    /// [`as_ptr_mut`](ContiguousEntryReference::as_ptr_mut),
-    /// [`into_ptr`](ContiguousEntryReference::into_ptr), and
-    /// [`into_ptr_mut`](ContiguousEntryReference::into_ptr_mut)
-    /// `ContiguousEntryReference` methods is guaranteed to be safe.
+    /// [`as_ptr`](refs::ContiguousEntryRef::as_ptr),
+    /// [`as_ptr_mut`](refs::ContiguousEntryRef::as_ptr_mut),
+    /// [`into_ptr`](refs::ContiguousEntryRef::into_ptr), and
+    /// [`into_ptr_mut`](refs::ContiguousEntryRef::into_ptr_mut)
+    /// `ContiguousEntryRef` methods is guaranteed to be safe.
     ///
     /// This method isn't unsafe as leaking data doesn't cause undefined
     /// behavior.
     /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
-    pub fn forget(self) {
+    pub fn forget(self) -> Impl::LockResult<*mut u8> {
+        let base = self.get_base();
         core::mem::forget(self);
+        base
     }
 }
 
@@ -477,8 +481,8 @@ pub(crate) mod sealed {
 }
 use sealed::*;
 
-/// A type alias for [`ContiguousMemoryStorage`] that enables references to data
-/// stored within it to be used safely across multiple threads.
+/// Alias for `ContiguousMemoryStorage` that uses
+/// [concurrent implementation](ImplConcurrent).
 ///
 /// # Example
 ///
@@ -487,9 +491,8 @@ use sealed::*;
 /// ```
 pub type SyncContiguousMemory = ContiguousMemoryStorage<ImplConcurrent>;
 
-/// A type alias for [`ContiguousMemoryStorage`] that offers a synchronous
-/// implementation without using internal mutexes making it faster but not
-/// thread safe.
+/// Alias for `ContiguousMemoryStorage` that uses
+/// [default implementation](ImplDefault).
 ///
 /// # Example
 ///
@@ -498,9 +501,8 @@ pub type SyncContiguousMemory = ContiguousMemoryStorage<ImplConcurrent>;
 /// ```
 pub type ContiguousMemory = ContiguousMemoryStorage<ImplDefault>;
 
-/// A type alias for [`ContiguousMemoryStorage`] that provides a
-/// minimal and unsafe implementation. Suitable when the container is guaranteed
-/// to outlive any returned pointers.
+/// Alias for `ContiguousMemoryStorage` that uses
+/// [unsafe implementation](ImplUnsafe).
 ///
 /// # Example
 ///
@@ -511,7 +513,7 @@ pub type UnsafeContiguousMemory = ContiguousMemoryStorage<ImplUnsafe>;
 
 #[cfg(all(test, not(feature = "no_std")))]
 mod test {
-    use super::prelude::*;
+    use super::*;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[repr(C)]

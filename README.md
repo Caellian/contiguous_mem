@@ -35,8 +35,13 @@ on access.
 
 ## Use cases
 
-- Ensuring stored data is placed adjacently in memory. ([example](./examples/game_loading.rs))
 - Storing differently typed/sized data. ([example](./examples/default_impl.rs))
+- Ensuring stored data is placed adjacently in memory. ([example](./examples/game_loading.rs))
+  - Note that for this use case implementations other than unsafe aren't ideal
+    for ensuring cache locality as returned references are smart pointers which
+    will be stored elsewhere in memory. Other implementations are however useful
+    for constructing contiguous data from code which would require complicated
+    memory management otherwise.
 
 ## Tradeoffs
 
@@ -79,7 +84,7 @@ contiguous_mem = { version = "0.4.*", default-features = false, features = ["no_
 ### Usage
 
 ```rust
-use contiguous_mem::prelude::*;
+use contiguous_mem::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Data {

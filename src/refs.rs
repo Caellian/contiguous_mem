@@ -1,10 +1,7 @@
-//! Contains code relating to returned reference types and their internal state.
+//! Returned reference types and read/write guards.
 //!
-//! Default implementation returns [`ContiguousEntryRef`] when items are
-//! stored which can be easily accessed through [`CMRef`] alias.
-//!
-//! Concurrent implementation returns [`SyncContiguousEntryRef`] when items are
-//! stored which can be easily accessed through [`SCMRef`] alias.
+//! See [`ContiguousMemoryStorage::push`](crate::ContiguousMemoryStorage::push)
+//! for information on implementation specific return values.
 
 use core::{
     marker::PhantomData,
@@ -432,6 +429,8 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
     /// When the reference goes out of scope, its region will be marked as free
     /// which means that a subsequent call to [`ContiguousMemoryStorage::push`]
     /// or friends can cause undefined behavior when dereferencing the pointer.
+    ///
+    /// [`ContiguousMemoryStorage::push`]: crate::ContiguousMemoryStorage::push
     pub unsafe fn as_ptr(&self) -> *const T
     where
         T: RefSizeReq,

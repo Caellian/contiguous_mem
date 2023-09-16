@@ -49,9 +49,8 @@ pub trait ImplBase: Sized {
     const USES_LOCKS: bool = false;
 }
 
-/// A marker struct representing the behavior specialization that does not
-/// require thread-safety. This implementation skips mutexes, making it faster
-/// but unsuitable for concurrent usage.
+/// Implementation that's not thread-safe but performs faster as it avoids
+/// mutexes and locks.
 ///
 /// For example usage of default implementation see: [`ContiguousMemory`](crate::ContiguousMemory)
 #[cfg_attr(feature = "debug", derive(Debug))]
@@ -63,9 +62,7 @@ impl ImplBase for ImplDefault {
     type LockResult<T> = T;
 }
 
-/// A marker struct representing the behavior specialization for thread-safe
-/// operations. This implementation ensures that the container's operations can
-/// be used safely in asynchronous contexts, utilizing mutexes to prevent data
+/// Thread-safe implementation utilizing mutexes and locks to prevent data
 /// races.
 ///
 /// For example usage of default implementation see:
@@ -81,9 +78,7 @@ impl ImplBase for ImplConcurrent {
     const USES_LOCKS: bool = true;
 }
 
-/// A marker struct representing the behavior specialization for unsafe
-/// implementation. Should be used when the container is guaranteed to outlive
-/// any pointers to data contained in represented memory block.
+/// Implementation which provides direct (unsafe) access to stored entries.
 ///
 /// For example usage of default implementation see:
 /// [`UnsafeContiguousMemory`](crate::UnsafeContiguousMemory)
@@ -574,7 +569,7 @@ impl ReferenceDetails for ImplUnsafe {
 pub trait StoreDataDetails: StorageDetails {
     unsafe fn push_raw<T: StoreRequirements>(
         state: &mut Self::StorageState,
-        data: *mut T,
+        data: *const T,
         layout: Layout,
     ) -> Self::PushResult<T>;
 
@@ -587,7 +582,7 @@ pub trait StoreDataDetails: StorageDetails {
 impl StoreDataDetails for ImplConcurrent {
     unsafe fn push_raw<T: StoreRequirements>(
         state: &mut Self::StorageState,
-        data: *mut T,
+        data: *const T,
         layout: Layout,
     ) -> Result<SyncContiguousEntryRef<T>, LockingError> {
         let (addr, range) = loop {
@@ -600,8 +595,19 @@ impl StoreDataDetails for ImplConcurrent {
                     break (found, taken);
                 }
                 Err(ContiguousMemoryError::NoStorageLeft) => {
-                    match ImplConcurrent::resize_container(state, ImplConcurrent::get_capacity(&ImplConcurrent::deref_state(state).capacity) * 2) {
-                        Ok(_) => {}
+                    let curr_capacity =
+                        ImplConcurrent::get_capacity(&ImplConcurrent::deref_state(state).capacity);
+                    let new_capacity = curr_capacity
+                        .saturating_mul(2)
+                        .max(curr_capacity + layout.size());
+                    match ImplConcurrent::resize_container(state, new_capacity) {
+                        Ok(_) => {
+                            match ImplConcurrent::resize_tracker(state, new_capacity) {
+                                Ok(_) => {},
+                                Err(ContiguousMemoryError::Lock(locking_err)) => return Err(locking_err),
+                                Err(_) => unreachable!("unable to grow AllocationTracker"),
+                            };
+                        }
                         Err(ContiguousMemoryError::Lock(locking_err)) => return Err(locking_err),
                         Err(other) => unreachable!(
                             "reached unexpected error while growing the container to store data: {:?}",
@@ -638,7 +644,7 @@ impl StoreDataDetails for ImplConcurrent {
 impl StoreDataDetails for ImplDefault {
     unsafe fn push_raw<T: StoreRequirements>(
         state: &mut Self::StorageState,
-        data: *mut T,
+        data: *const T,
         layout: Layout,
     ) -> ContiguousEntryRef<T> {
         let (addr, range) = loop {
@@ -653,8 +659,15 @@ impl StoreDataDetails for ImplDefault {
                     break (found, taken);
                 }
                 Err(ContiguousMemoryError::NoStorageLeft) => {
-                    match ImplDefault::resize_container(state, ImplDefault::get_capacity(&ImplDefault::deref_state(state).capacity) * 2) {
-                        Ok(_) => {},
+                    let curr_capacity =
+                        ImplDefault::get_capacity(&ImplDefault::deref_state(state).capacity);
+                    let new_capacity = curr_capacity
+                        .saturating_mul(2)
+                        .max(curr_capacity + layout.size());
+                    match ImplDefault::resize_container(state, new_capacity) {
+                        Ok(_) => {
+                            ImplDefault::resize_tracker(state, new_capacity).expect("unable to grow AllocationTracker");
+                        },
                         Err(err) => unreachable!(
                             "reached unexpected error while growing the container to store data: {:?}",
                             err
@@ -682,10 +695,11 @@ impl StoreDataDetails for ImplDefault {
 }
 
 impl StoreDataDetails for ImplUnsafe {
-    /// Returns a raw pointer (`*mut T`) to the stored value or
+    /// Returns a raw pointer (`*mut T`) to the stored value or an error if no
+    /// free regions remain
     unsafe fn push_raw<T: StoreRequirements>(
         state: &mut Self::StorageState,
-        data: *mut T,
+        data: *const T,
         layout: Layout,
     ) -> Result<*mut T, ContiguousMemoryError> {
         let (addr, range) = loop {
@@ -718,14 +732,11 @@ impl StoreDataDetails for ImplUnsafe {
 }
 
 /// Trait representing requirements for implementation details of the
-/// [`ContiguousMemoryStorage`](ContiguousMemoryStorage).
+/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage).
 ///
 /// This trait is implemented by:
 /// - [`ImplDefault`]
 /// - [`ImplConcurrent`]
 /// - [`ImplUnsafe`]
-///
-/// As none of the underlying traits can't be implemented, changes to this trait
-/// aren't considered breaking and won't affect semver.
 pub trait ImplDetails: ImplBase + StorageDetails + ReferenceDetails + StoreDataDetails {}
 impl<Impl: ImplBase + StorageDetails + ReferenceDetails + StoreDataDetails> ImplDetails for Impl {}

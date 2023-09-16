@@ -1,6 +1,6 @@
 #![feature(ptr_metadata)]
 
-use contiguous_mem::prelude::*;
+use contiguous_mem::*;
 
 trait Greetable {
     fn print_hello(&self);
