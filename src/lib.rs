@@ -551,6 +551,8 @@ pub type UnsafeContiguousMemory = ContiguousMemoryStorage<ImplUnsafe>;
 
 #[cfg(all(test, not(feature = "no_std")))]
 mod test {
+    use core::mem::align_of;
+
     use super::*;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -652,26 +654,28 @@ mod test {
 
     #[test]
     fn resize_automatically() {
-        let mut memory = ContiguousMemory::new(144);
+        let mut memory = ContiguousMemory::new_aligned(12, align_of::<u64>()).unwrap();
 
-        memory.push(Person {
-            name: "Jacky".to_string(),
-            last_name: "Larsson".to_string(),
-        });
-        memory.push(Person {
-            name: "Jacky".to_string(),
-            last_name: "Larsson".to_string(),
-        });
-        memory.push(Person {
-            name: "Jacky".to_string(),
-            last_name: "Larsson".to_string(),
-        });
-        assert_eq!(memory.can_push::<Person>().unwrap(), false);
+        {
+            let _a = memory.push(1u32);
+            let _b = memory.push(2u32);
+            let _c = memory.push(3u32);
+            assert_eq!(memory.can_push::<u32>().unwrap(), false);
+            let _d = memory.push(4u32);
+            assert_eq!(memory.get_capacity(), 24);
+        }
 
-        assert_eq!(memory.get_capacity(), 288);
-
-        // 144
-        //192
+        memory.resize(4).expect("can't shrink empty storage");
+        {
+            let _a = memory.push(1u16);
+            let _b = memory.push(2u16);
+            assert_eq!(memory.can_push::<u64>().unwrap(), false);
+            let _c = memory.push(3u64);
+            // expecting 12, but due to alignment we're skipping two u16 slots
+            // and then double the size as remaining (aligned) 4 bytes aren't
+            // enough for u64
+            assert_eq!(memory.get_capacity(), 24);
+        }
     }
 
     #[test]
