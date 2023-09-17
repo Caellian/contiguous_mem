@@ -152,10 +152,8 @@ pub trait StorageDetails: ImplBase {
 
     /// Returns whether a given layout can be stored or returns an error if
     /// [`AllocationTracker`] can't be stored.
-    fn peek_next(
-        state: &Self::StorageState,
-        layout: Layout,
-    ) -> Result<Option<ByteRange>, ContiguousMemoryError>;
+    fn peek_next(state: &Self::StorageState, layout: Layout)
+        -> Self::LockResult<Option<ByteRange>>;
 }
 
 impl StorageDetails for ImplConcurrent {
@@ -246,7 +244,7 @@ impl StorageDetails for ImplConcurrent {
     fn peek_next(
         state: &Self::StorageState,
         layout: Layout,
-    ) -> Result<Option<ByteRange>, ContiguousMemoryError> {
+    ) -> Result<Option<ByteRange>, LockingError> {
         let lock = state.tracker.lock_named(LockSource::AllocationTracker)?;
         Ok(lock.peek_next(layout))
     }
@@ -314,11 +312,7 @@ impl StorageDetails for ImplDefault {
         state: &mut Self::StorageState,
         new_capacity: usize,
     ) -> Result<(), ContiguousMemoryError> {
-        state
-            .tracker
-            .try_borrow_mut()
-            .map_err(|_| ContiguousMemoryError::TrackerInUse)?
-            .resize(new_capacity)
+        state.tracker.borrow_mut().resize(new_capacity)
     }
 
     fn shrink_tracker(state: &mut Self::StorageState) -> Option<usize> {
@@ -330,22 +324,13 @@ impl StorageDetails for ImplDefault {
         layout: Layout,
     ) -> Result<ByteRange, ContiguousMemoryError> {
         let base = Self::get_base(&state.base) as usize;
-        let mut tracker = state
-            .tracker
-            .try_borrow_mut()
-            .map_err(|_| ContiguousMemoryError::TrackerInUse)?;
+        let mut tracker = state.tracker.borrow_mut();
         tracker.take_next(base, layout)
     }
 
-    fn peek_next(
-        state: &Self::StorageState,
-        layout: Layout,
-    ) -> Result<Option<ByteRange>, ContiguousMemoryError> {
-        let tracker = state
-            .tracker
-            .try_borrow()
-            .map_err(|_| ContiguousMemoryError::TrackerInUse)?;
-        Ok(tracker.peek_next(layout))
+    fn peek_next(state: &Self::StorageState, layout: Layout) -> Option<ByteRange> {
+        let tracker = state.tracker.borrow();
+        tracker.peek_next(layout)
     }
 }
 
@@ -425,11 +410,8 @@ impl StorageDetails for ImplUnsafe {
         state.tracker.take_next(base, layout)
     }
 
-    fn peek_next(
-        state: &Self::StorageState,
-        layout: Layout,
-    ) -> Result<Option<ByteRange>, ContiguousMemoryError> {
-        Ok(state.tracker.peek_next(layout))
+    fn peek_next(state: &Self::StorageState, layout: Layout) -> Option<ByteRange> {
+        state.tracker.peek_next(layout)
     }
 }
 
@@ -714,7 +696,7 @@ impl StoreDataDetails for ImplUnsafe {
                 unsafe {
                     core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
                 }
-                
+
                 (found, taken)
             }
             Err(other) => return Err(other),

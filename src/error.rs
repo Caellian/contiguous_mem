@@ -136,10 +136,6 @@ pub enum ContiguousMemoryError {
     },
     /// Indicates that a mutex wasn't lockable.
     Lock(LockingError),
-    /// Attempted to borrow the
-    /// [`AllocationTracker`](crate::tracker::AllocationTracker) which is
-    /// already in use.
-    TrackerInUse,
     /// Indicates that the provided [`Layout`](core::alloc::Layout) is invalid.
     Layout(
         /// The underlying error that caused the [`Layout`](core::alloc::Layout)
@@ -189,9 +185,6 @@ impl Display for ContiguousMemoryError {
                 min_required
             ),
             ContiguousMemoryError::Lock(it) => write!(f, "Poison error: {}", it),
-            ContiguousMemoryError::TrackerInUse => {
-                write!(f, "Cannot borrow AllocationTracker: it is already in use")
-            }
             ContiguousMemoryError::Layout(it) => write!(f, "Layout error: {}", it),
             ContiguousMemoryError::BorrowMut(it) => write!(f, "Borrow mutable error: {}", it),
         }

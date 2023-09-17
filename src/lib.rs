@@ -150,45 +150,6 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         Ok(moved)
     }
 
-    /// Returns `true` if the provided value can be stored without growing the
-    /// container.
-    ///
-    /// It's usually better to try storing the value directly and then handle
-    /// the case where it wasn't stored (for unsafe implementation).
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use contiguous_mem::UnsafeContiguousMemory;
-    /// # use core::mem::size_of_val;
-    /// let mut storage = UnsafeContiguousMemory::new(0);
-    /// let value = [2, 4, 8, 16];
-    ///
-    /// # assert_eq!(storage.can_push::<Vec<i32>>().unwrap(), false);
-    /// if !storage.can_push::<Vec<i32>>().unwrap() {
-    ///     storage.resize(storage.get_capacity() + size_of_val(&value));
-    ///
-    ///     // ...update old pointers...
-    /// }
-    ///
-    /// let stored_value =
-    ///   storage.push(value).expect("unable to store after growing the container");
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// If the `AllocationTracker` can't be immutably accesed, a
-    /// [`ContiguousMemoryError::TrackerInUse`] error is returned.
-    ///
-    /// For concurrent implementation a [`ContiguousMemoryError::Lock`] is
-    /// returned under same conditions.
-    ///
-    /// Unsafe implementation never fails.
-    pub fn can_push<T: StoreRequirements>(&self) -> Result<bool, ContiguousMemoryError> {
-        let layout = Layout::new::<T>();
-        Ok(Impl::peek_next(&self.inner, layout)?.is_some())
-    }
-
     /// Stores a `value` of type `T` in the contiguous memory block and returns
     /// a reference or a pointer pointing to it.
     ///
@@ -197,7 +158,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///
     /// Returned value is implementation specific:
     ///
-    /// |Implementation | Result | Alias |
+    /// | Implementation | Result | Alias |
     /// |-|:-:|:-:|
     /// |[Default](ImplDefault)|[`ContiguousEntryRef<T>`](refs::ContiguousEntryRef)|[`CERef`](refs::CERef)|
     /// |[Concurrent](ImplConcurrent)|[`SyncContiguousEntryRef<T>`](refs::SyncContiguousEntryRef)|[`SCERef`](refs::SCERef)|
@@ -269,10 +230,6 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// Assumes value is stored at the provided _relative_ `position` in
     /// managed memory and returns a pointer or a reference to it.
     ///
-    /// This functions isn't unsafe because creating an invalid pointer isn't
-    /// considered unsafe. Responsibility for guaranteeing safety falls on
-    /// code that's dereferencing the pointer.
-    ///
     /// # Example
     ///
     /// ```rust
@@ -292,6 +249,12 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///     assert_eq!(*new_position, 278u32);
     /// }
     /// ```
+    ///
+    /// # Safety
+    ///
+    /// This functions isn't unsafe because creating an invalid pointer isn't
+    /// considered unsafe. Responsibility for guaranteeing safety falls on
+    /// code that's dereferencing the pointer.
     pub fn assume_stored<T: StoreRequirements>(
         &self,
         position: usize,
@@ -322,6 +285,26 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
 }
 
 impl ContiguousMemoryStorage<ImplDefault> {
+    /// Returns `true` if provided generic type `T` can be stored without
+    /// growing the container.
+    pub fn can_push<T: StoreRequirements>(&self) -> bool {
+        let layout = Layout::new::<T>();
+        ImplDefault::peek_next(&self.inner, layout).is_some()
+    }
+
+    /// Returns `true` if the provided `value` can be stored without growing the
+    /// container.
+    pub fn can_push_value<T: StoreRequirements>(&self, value: &T) -> bool {
+        let layout = Layout::for_value(value);
+        ImplDefault::peek_next(&self.inner, layout).is_some()
+    }
+
+    /// Returns `true` if the provided `layout` can be stored without growing
+    /// the container.
+    pub fn can_push_layout(&self, layout: Layout) -> bool {
+        ImplDefault::peek_next(&self.inner, layout).is_some()
+    }
+
     /// Shrinks the allocated memory to fit the currently stored data and
     /// returns the new capacity.
     pub fn shrink_to_fit(&mut self) -> usize {
@@ -335,8 +318,43 @@ impl ContiguousMemoryStorage<ImplDefault> {
 }
 
 impl ContiguousMemoryStorage<ImplConcurrent> {
+    /// Returns `true` if provided generic type `T` can be stored without
+    /// growing the container or a [`LockingError::Poisoned`] error if
+    /// allocation tracker mutex has been poisoned.
+    ///
+    /// This function will block the current tread until internal allocation
+    /// tracked doesn't become available.
+    pub fn can_push<T: StoreRequirements>(&self) -> Result<bool, LockingError> {
+        let layout = Layout::new::<T>();
+        ImplConcurrent::peek_next(&self.inner, layout).map(|it| it.is_some())
+    }
+
+    /// Returns `true` if the provided `value` can be stored without growing the
+    /// container or a [`LockingError::Poisoned`] error if allocation tracker
+    /// mutex has been poisoned.
+    ///
+    /// This function will block the current tread until internal allocation
+    /// tracked doesn't become available.
+    pub fn can_push_value<T: StoreRequirements>(&self, value: &T) -> Result<bool, LockingError> {
+        let layout = Layout::for_value(value);
+        ImplConcurrent::peek_next(&self.inner, layout).map(|it| it.is_some())
+    }
+
+    /// Returns `true` if the provided `layout` can be stored without growing
+    /// the container or a [`LockingError::Poisoned`] error if allocation
+    /// tracker mutex has been poisoned.
+    ///
+    /// This function will block the current tread until internal allocation
+    /// tracked doesn't become available.
+    pub fn can_push_layout(&self, layout: Layout) -> Result<bool, LockingError> {
+        ImplConcurrent::peek_next(&self.inner, layout).map(|it| it.is_some())
+    }
+
     /// Shrinks the allocated memory to fit the currently stored data and
     /// returns the new capacity.
+    ///
+    /// This function will block the current tread until internal allocation
+    /// tracked doesn't become available.
     pub fn shrink_to_fit(&mut self) -> Result<usize, LockingError> {
         if let Some(shrunk) = ImplConcurrent::shrink_tracker(&mut self.inner)? {
             self.resize(shrunk).expect("unable to shrink container");
@@ -348,6 +366,48 @@ impl ContiguousMemoryStorage<ImplConcurrent> {
 }
 
 impl ContiguousMemoryStorage<ImplUnsafe> {
+    /// Returns `true` if the provided value can be stored without growing the
+    /// container.
+    ///
+    /// It's usually clearer to try storing the value directly and then handle
+    /// the case where it wasn't stored through error matching.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use contiguous_mem::UnsafeContiguousMemory;
+    /// # use core::mem::size_of_val;
+    /// let mut storage = UnsafeContiguousMemory::new(0);
+    /// let value = [2, 4, 8, 16];
+    ///
+    /// # assert_eq!(storage.can_push::<Vec<i32>>().unwrap(), false);
+    /// if !storage.can_push::<Vec<i32>>().unwrap() {
+    ///     storage.resize(storage.get_capacity() + size_of_val(&value));
+    ///
+    ///     // ...update old pointers...
+    /// }
+    ///
+    /// let stored_value =
+    ///   storage.push(value).expect("unable to store after growing the container");
+    /// ```
+    pub fn can_push<T: StoreRequirements>(&self) -> bool {
+        let layout = Layout::new::<T>();
+        ImplUnsafe::peek_next(&self.inner, layout).is_some()
+    }
+
+    /// Returns `true` if the provided `value` can be stored without growing the
+    /// container.
+    pub fn can_push_value<T: StoreRequirements>(&self, value: &T) -> bool {
+        let layout = Layout::for_value(value);
+        ImplUnsafe::peek_next(&self.inner, layout).is_some()
+    }
+
+    /// Returns `true` if the provided `layout` can be stored without growing
+    /// the container.
+    pub fn can_push_layout(&self, layout: Layout) -> bool {
+        ImplUnsafe::peek_next(&self.inner, layout).is_some()
+    }
+
     /// Shrinks the allocated memory to fit the currently stored data and
     /// returns the new capacity.
     pub fn shrink_to_fit(&mut self) -> usize {
@@ -660,7 +720,7 @@ mod test {
             let _a = memory.push(1u32);
             let _b = memory.push(2u32);
             let _c = memory.push(3u32);
-            assert_eq!(memory.can_push::<u32>().unwrap(), false);
+            assert_eq!(memory.can_push::<u32>(), false);
             let _d = memory.push(4u32);
             assert_eq!(memory.get_capacity(), 24);
         }
@@ -669,7 +729,7 @@ mod test {
         {
             let _a = memory.push(1u16);
             let _b = memory.push(2u16);
-            assert_eq!(memory.can_push::<u64>().unwrap(), false);
+            assert_eq!(memory.can_push::<u64>(), false);
             let _c = memory.push(3u64);
             // expecting 12, but due to alignment we're skipping two u16 slots
             // and then double the size as remaining (aligned) 4 bytes aren't
