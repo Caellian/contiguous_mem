@@ -112,6 +112,10 @@ fn main() {
 <cite>Note that reference types returned by store are inferred and only shown
 here for demonstration purposes.</cite>
 
+For more usage examples see the
+[`examples`](https://github.com/Caellian/contiguous_mem/tree/trunk/examples)
+directory.
+
 ## Alternatives
 
 - manually managing memory to ensure contiguous placement of data

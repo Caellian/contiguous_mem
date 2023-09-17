@@ -1,5 +1,5 @@
 contiguous_mem streamlines storage and management of data stored in contiguous
-memory block.
+blocks of memory.
 
 ## Implementations
 
@@ -11,7 +11,9 @@ details flag:
 - [`SyncContiguousMemory`]
 - [`UnsafeContiguousMemory`]
 
-See individual items for usage examples.
+See individual items for usage examples, as well as project
+[`examples`](https://github.com/Caellian/contiguous_mem/tree/trunk/examples)
+directory.
 
 ## Features
 
