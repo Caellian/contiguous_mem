@@ -12,11 +12,6 @@
 #[cfg(feature = "no_std")]
 extern crate alloc;
 
-#[cfg(all(feature = "no_std", not(feature = "no_std")))]
-compile_error!(
-    "contiguous_mem: please enable 'no_std' feature to enable 'no_std' dependencies, or the default 'std' feature"
-);
-
 mod details;
 pub mod error;
 pub mod range;
@@ -74,22 +69,15 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     }
 
     /// Creates a new `ContiguousMemory` instance with the provided `layout`.
-    pub fn new_from_layout(layout: Layout) -> Result<Self, LayoutError> {
+    pub fn new_for_layout(layout: Layout) -> Self {
         let base = unsafe { allocator::alloc(layout) };
-        Ok(ContiguousMemoryStorage {
-            inner: Impl::build_state(base, layout.size(), layout.align())?,
-        })
-    }
-
-    /// Returns the base address (`*mut u8`) of the allocated memory.
-    ///
-    /// # Errors
-    ///
-    /// For [concurrent implementation](ImplConcurrent) this function can return
-    /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) if the
-    /// mutex holding the base address has been poisoned.
-    pub fn get_base(&self) -> Impl::LockResult<*mut u8> {
-        Impl::get_base(&self.base)
+        unsafe {
+            // SAFETY: Impl::build_state won't return a LayoutError because
+            // we're constructing it from a provided layout argument.
+            ContiguousMemoryStorage {
+                inner: Impl::build_state(base, layout.size(), layout.align()).unwrap_unchecked(),
+            }
+        }
     }
 
     /// Returns the current capacity of the memory container.
@@ -97,13 +85,11 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// The capacity represents the size of the memory block that has been
     /// allocated for storing data. It may be larger than the amount of data
     /// currently stored within the container.
-    #[must_use]
     pub fn get_capacity(&self) -> usize {
         Impl::get_capacity(&self.capacity)
     }
 
     /// Returns the layout of the memory region containing stored data.
-    #[must_use]
     pub fn get_layout(&self) -> Layout {
         Impl::deref_state(&self.inner).layout()
     }
@@ -278,13 +264,18 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// behavior.
     /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
     pub fn forget(self) -> Impl::LockResult<*mut u8> {
-        let base = self.get_base();
+        let base = Impl::get_base(&self.base);
         core::mem::forget(self);
         base
     }
 }
 
 impl ContiguousMemoryStorage<ImplDefault> {
+    /// Returns the base address of the allocated memory.
+    pub fn get_base(&self) -> *const () {
+        ImplDefault::get_base(&self.base) as *const ()
+    }
+
     /// Returns `true` if provided generic type `T` can be stored without
     /// growing the container.
     pub fn can_push<T: StoreRequirements>(&self) -> bool {
@@ -318,11 +309,21 @@ impl ContiguousMemoryStorage<ImplDefault> {
 }
 
 impl ContiguousMemoryStorage<ImplConcurrent> {
+    /// Returns the base address of the allocated memory or a
+    /// [`LockingError::Poisoned`] error if the mutex holding the base address
+    /// has been poisoned.
+    ///
+    /// This function will block the current thread until base address RwLock
+    /// doesn't become readable.
+    pub fn get_base(&self) -> Result<*const (), LockingError> {
+        unsafe { core::mem::transmute(ImplConcurrent::get_base(&self.base)) }
+    }
+
     /// Returns `true` if provided generic type `T` can be stored without
     /// growing the container or a [`LockingError::Poisoned`] error if
     /// allocation tracker mutex has been poisoned.
     ///
-    /// This function will block the current tread until internal allocation
+    /// This function will block the current thread until internal allocation
     /// tracked doesn't become available.
     pub fn can_push<T: StoreRequirements>(&self) -> Result<bool, LockingError> {
         let layout = Layout::new::<T>();
@@ -333,7 +334,7 @@ impl ContiguousMemoryStorage<ImplConcurrent> {
     /// container or a [`LockingError::Poisoned`] error if allocation tracker
     /// mutex has been poisoned.
     ///
-    /// This function will block the current tread until internal allocation
+    /// This function will block the current thread until internal allocation
     /// tracked doesn't become available.
     pub fn can_push_value<T: StoreRequirements>(&self, value: &T) -> Result<bool, LockingError> {
         let layout = Layout::for_value(value);
@@ -344,7 +345,7 @@ impl ContiguousMemoryStorage<ImplConcurrent> {
     /// the container or a [`LockingError::Poisoned`] error if allocation
     /// tracker mutex has been poisoned.
     ///
-    /// This function will block the current tread until internal allocation
+    /// This function will block the current thread until internal allocation
     /// tracked doesn't become available.
     pub fn can_push_layout(&self, layout: Layout) -> Result<bool, LockingError> {
         ImplConcurrent::peek_next(&self.inner, layout).map(|it| it.is_some())
@@ -353,7 +354,7 @@ impl ContiguousMemoryStorage<ImplConcurrent> {
     /// Shrinks the allocated memory to fit the currently stored data and
     /// returns the new capacity.
     ///
-    /// This function will block the current tread until internal allocation
+    /// This function will block the current thread until internal allocation
     /// tracked doesn't become available.
     pub fn shrink_to_fit(&mut self) -> Result<usize, LockingError> {
         if let Some(shrunk) = ImplConcurrent::shrink_tracker(&mut self.inner)? {
@@ -366,6 +367,11 @@ impl ContiguousMemoryStorage<ImplConcurrent> {
 }
 
 impl ContiguousMemoryStorage<ImplUnsafe> {
+    /// Returns the base address of the allocated memory.
+    pub fn get_base(&self) -> *const () {
+        self.base.0 as *const ()
+    }
+
     /// Returns `true` if the provided value can be stored without growing the
     /// container.
     ///
@@ -426,11 +432,11 @@ impl ContiguousMemoryStorage<ImplUnsafe> {
     #[must_use]
     pub fn copy_data(&self) -> Self {
         let current_layout = self.get_layout();
-        let result = Self::new_from_layout(current_layout).expect("current layout should be valid");
+        let result = Self::new_for_layout(current_layout);
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self.get_base(),
-                result.get_base(),
+                result.get_base() as *mut (),
                 current_layout.size(),
             );
         }
