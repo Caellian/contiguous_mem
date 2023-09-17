@@ -386,8 +386,8 @@ impl ContiguousMemoryStorage<ImplUnsafe> {
     /// let mut storage = UnsafeContiguousMemory::new(0);
     /// let value = [2, 4, 8, 16];
     ///
-    /// # assert_eq!(storage.can_push::<Vec<i32>>().unwrap(), false);
-    /// if !storage.can_push::<Vec<i32>>().unwrap() {
+    /// # assert_eq!(storage.can_push::<Vec<i32>>(), false);
+    /// if !storage.can_push::<Vec<i32>>() {
     ///     storage.resize(storage.get_capacity() + size_of_val(&value));
     ///
     ///     // ...update old pointers...
