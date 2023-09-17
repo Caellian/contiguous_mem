@@ -559,6 +559,12 @@ pub trait StoreDataDetails: StorageDetails {
         layout: Layout,
     ) -> Self::PushResult<T>;
 
+    unsafe fn push_raw_persisted<T: StoreRequirements>(
+        state: &mut Self::StorageState,
+        data: *const T,
+        layout: Layout,
+    ) -> Self::PushResult<T>;
+
     fn assume_stored<T: StoreRequirements>(
         state: &Self::StorageState,
         position: usize,
@@ -610,6 +616,21 @@ impl StoreDataDetails for ImplConcurrent {
         };
 
         Ok(ImplConcurrent::build_ref(state, addr as *mut T, range))
+    }
+
+    unsafe fn push_raw_persisted<T: StoreRequirements>(
+        state: &mut Self::StorageState,
+        data: *const T,
+        layout: Layout,
+    ) -> Self::PushResult<T> {
+        match Self::push_raw(state, data, layout) {
+            Ok(it) => {
+                let result = it.clone();
+                core::mem::forget(it.inner);
+                Ok(result)
+            }
+            err => err,
+        }
     }
 
     fn assume_stored<T: StoreRequirements>(
@@ -670,6 +691,17 @@ impl StoreDataDetails for ImplDefault {
         ImplDefault::build_ref(state, addr as *mut T, range)
     }
 
+    unsafe fn push_raw_persisted<T: StoreRequirements>(
+        state: &mut Self::StorageState,
+        data: *const T,
+        layout: Layout,
+    ) -> Self::PushResult<T> {
+        let value = Self::push_raw(state, data, layout);
+        let result = value.clone();
+        core::mem::forget(value.inner);
+        result
+    }
+
     fn assume_stored<T: StoreRequirements>(
         state: &Self::StorageState,
         position: usize,
@@ -703,6 +735,14 @@ impl StoreDataDetails for ImplUnsafe {
         };
 
         Ok(ImplUnsafe::build_ref(state, addr as *mut T, range))
+    }
+
+    unsafe fn push_raw_persisted<T: StoreRequirements>(
+        state: &mut Self::StorageState,
+        data: *const T,
+        layout: Layout,
+    ) -> Self::PushResult<T> {
+        Self::push_raw(state, data, layout)
     }
 
     fn assume_stored<T: StoreRequirements>(state: &Self::StorageState, position: usize) -> *mut T {

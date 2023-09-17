@@ -22,6 +22,7 @@ mod types;
 use details::*;
 pub use details::{ImplConcurrent, ImplDefault, ImplUnsafe};
 use range::ByteRange;
+use refs::sealed::EntryRef;
 pub use refs::{CERef, ContiguousEntryRef, SCERef, SyncContiguousEntryRef};
 use types::*;
 
@@ -176,7 +177,23 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         unsafe { self.push_raw(pos, layout) }
     }
 
-    /// Works same as [`store`](ContiguousMemory::push) but takes a pointer and
+    /// Stores a `value` of type `T` in the contiguous memory block and returns
+    /// a reference to it which doesn't mark the memory segment as free when
+    /// dropped.
+    ///
+    /// See [`ContiguousMemoryStorage::push`] for details.
+    pub fn push_persisted<T: StoreRequirements>(&mut self, value: T) -> Impl::PushResult<T>
+    where
+        Impl::ReferenceType<T>: EntryRef,
+    {
+        let mut data = ManuallyDrop::new(value);
+        let layout = Layout::for_value(&data);
+        let pos = &mut *data as *mut T;
+
+        unsafe { self.push_raw_persisted(pos, layout) }
+    }
+
+    /// Works same as [`push`](ContiguousMemory::push) but takes a pointer and
     /// layout.
     ///
     /// Pointer type is used to deduce the destruction behavior for
@@ -211,6 +228,20 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         layout: Layout,
     ) -> Impl::PushResult<T> {
         Impl::push_raw(&mut self.inner, data, layout)
+    }
+
+    /// Variant of [`push_raw`](ContiguousMemory::push_raw) which returns a
+    /// reference that doesn't mark the used memory segment as free when
+    /// dropped.
+    pub unsafe fn push_raw_persisted<T: StoreRequirements>(
+        &mut self,
+        data: *const T,
+        layout: Layout,
+    ) -> Impl::PushResult<T>
+    where
+        Impl::ReferenceType<T>: EntryRef,
+    {
+        Impl::push_raw_persisted(&mut self.inner, data, layout)
     }
 
     /// Assumes value is stored at the provided _relative_ `position` in
@@ -762,10 +793,10 @@ mod test {
 
         memory.resize(4).expect("can't shrink empty storage");
         {
-            let _a = memory.push(1u16);
-            let _b = memory.push(2u16);
+            memory.push_persisted(1u16);
+            memory.push_persisted(2u16);
             assert_eq!(memory.can_push::<u64>(), false);
-            let _c = memory.push(3u64);
+            memory.push_persisted(3u64);
             // expecting 12, but due to alignment we're skipping two u16 slots
             // and then double the size as remaining (aligned) 4 bytes aren't
             // enough for u64

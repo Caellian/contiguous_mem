@@ -264,6 +264,8 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     }
 }
 
+impl<T: ?Sized> EntryRef for SyncContiguousEntryRef<T> {}
+
 impl<T: ?Sized> Clone for SyncContiguousEntryRef<T> {
     fn clone(&self) -> Self {
         SyncContiguousEntryRef {
@@ -495,6 +497,8 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
     }
 }
 
+impl<T: ?Sized> EntryRef for ContiguousEntryRef<T> {}
+
 impl<T: ?Sized> Clone for ContiguousEntryRef<T> {
     fn clone(&self) -> Self {
         ContiguousEntryRef {
@@ -518,6 +522,8 @@ impl<T: ?Sized> core::fmt::Debug for ContiguousEntryRef<T> {
 
 pub(crate) mod sealed {
     use super::*;
+
+    pub trait EntryRef {}
 
     /// Internal state of [`ContiguousEntryRef`] and [`SyncContiguousEntryRef`].
     pub struct ReferenceState<T: ?Sized, Impl: ImplDetails> {
