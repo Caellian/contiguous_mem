@@ -247,27 +247,6 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ) -> Impl::LockResult<Impl::ReferenceType<T>> {
         Impl::assume_stored(&self.inner, position)
     }
-
-    /// Forgets this container without dropping it and returns the base address.
-    ///
-    /// Calling this method will create a memory leak because the smart pointer
-    /// to state will not be dropped even when all of the created references go
-    /// out of scope. As this method takes ownership of the container, calling
-    /// it also ensures that dereferencing pointers created by
-    /// [`as_ptr`](refs::ContiguousEntryRef::as_ptr),
-    /// [`as_ptr_mut`](refs::ContiguousEntryRef::as_ptr_mut),
-    /// [`into_ptr`](refs::ContiguousEntryRef::into_ptr), and
-    /// [`into_ptr_mut`](refs::ContiguousEntryRef::into_ptr_mut)
-    /// `ContiguousEntryRef` methods is guaranteed to be safe.
-    ///
-    /// This method isn't unsafe as leaking data doesn't cause undefined
-    /// behavior.
-    /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
-    pub fn forget(self) -> Impl::LockResult<*mut u8> {
-        let base = Impl::get_base(&self.base);
-        core::mem::forget(self);
-        base
-    }
 }
 
 impl ContiguousMemoryStorage<ImplDefault> {
@@ -305,6 +284,31 @@ impl ContiguousMemoryStorage<ImplDefault> {
         } else {
             self.capacity.get()
         }
+    }
+
+    /// Forgets this container without dropping it and returns its base address
+    /// and [`Layout`].
+    ///
+    /// # Safety
+    ///
+    /// Calling this method will create a memory leak because the smart pointer
+    /// to state will not be dropped even when all of the created references go
+    /// out of scope. As this method takes ownership of the container, calling
+    /// it also ensures that dereferencing pointers created by
+    /// [`as_ptr`](refs::ContiguousEntryRef::as_ptr),
+    /// [`as_ptr_mut`](refs::ContiguousEntryRef::as_ptr_mut),
+    /// [`into_ptr`](refs::ContiguousEntryRef::into_ptr), and
+    /// [`into_ptr_mut`](refs::ContiguousEntryRef::into_ptr_mut)
+    /// `ContiguousEntryRef` methods is guaranteed to be safe.
+    ///
+    /// This method isn't unsafe as leaking data doesn't cause undefined
+    /// behavior.
+    /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
+    pub fn forget(self) -> (*const (), Layout) {
+        let base = ImplDefault::get_base(&self.base);
+        let layout = self.get_layout();
+        core::mem::forget(self);
+        (base as *const (), layout)
     }
 }
 
@@ -363,6 +367,19 @@ impl ContiguousMemoryStorage<ImplConcurrent> {
         } else {
             Ok(self.get_capacity())
         }
+    }
+
+    /// Forgets this container without dropping it and returns its base address
+    /// and [`Layout`], or a [`LockingError::Poisoned`] error if base address
+    /// `RwLock` has been poisoned.
+    ///
+    /// For details on safety see _Safety_ section of
+    /// [default implementation](ContiguousMemoryStorage<ImplConcurrent>::forget).
+    pub fn forget(self) -> Result<(*const (), Layout), LockingError> {
+        let base = ImplConcurrent::get_base(&self.base);
+        let layout = self.get_layout();
+        core::mem::forget(self);
+        base.map(|it| (it as *const (), layout))
     }
 }
 
@@ -469,6 +486,18 @@ impl ContiguousMemoryStorage<ImplUnsafe> {
         if let Some(freed) = ImplUnsafe::free_region(&mut self.inner, ByteRange(pos, pos + size)) {
             core::ptr::drop_in_place(freed as *mut T);
         }
+    }
+
+    /// Forgets this container without dropping it and returns its base address
+    /// and [`Layout`].
+    ///
+    /// For details on safety see _Safety_ section of
+    /// [default implementation](ContiguousMemoryStorage<ImplConcurrent>::forget).
+    pub fn forget(self) -> (*const (), Layout) {
+        let base = ImplUnsafe::get_base(&self.base);
+        let layout = self.get_layout();
+        core::mem::forget(self);
+        (base as *const (), layout)
     }
 }
 
