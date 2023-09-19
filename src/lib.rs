@@ -21,9 +21,11 @@ mod types;
 
 use details::*;
 pub use details::{ImplConcurrent, ImplDefault, ImplUnsafe};
-use range::ByteRange;
+pub use range::ByteRange;
 use refs::sealed::EntryRef;
 pub use refs::{CERef, ContiguousEntryRef, SCERef, SyncContiguousEntryRef};
+#[cfg(feature = "ptr_metadata")]
+pub use types::static_metadata;
 use types::*;
 
 use core::{

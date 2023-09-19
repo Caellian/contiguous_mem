@@ -60,11 +60,11 @@ Add the crate to your dependencies:
 contiguous_mem = { version = "0.4.*" }
 ```
 
-Optionally disable the `std` feature and enable `no_std` feature to use in `no_std` environment:
+Optionally enable `no_std` feature to use in `no_std` environment:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.4.*", default-features = false, features = ["no_std"] }
+contiguous_mem = { version = "0.4.*", features = ["no_std"] }
 ```
 
 ### Features

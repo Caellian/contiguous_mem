@@ -1,6 +1,6 @@
 [package]
 name = "contiguous-mem"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "A contiguous memory storage"
 authors = ["Tin Švagelj <tin.svagelj@live.com>"]

@@ -187,6 +187,12 @@ mod pointer {
     use super::*;
     use core::ptr::NonNull;
 
+    /// Returns [`Pointee`] metadata for provided pair of struct `S` and some
+    /// unsized type (e.g. a trait) `T`.
+    /// 
+    /// This metadata is usually a pointer to vtable of `T` implementation for
+    /// `S`, but can be something else and the value is considered internal to
+    /// the compiler.
     pub const fn static_metadata<S, T: ?Sized>() -> <T as Pointee>::Metadata
     where
         S: Unsize<T>,
@@ -212,4 +218,4 @@ mod pointer {
     }
 }
 #[cfg(feature = "ptr_metadata")]
-pub(crate) use pointer::*;
+pub use pointer::*;

@@ -179,6 +179,27 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
         }
     }
 
+    /// Transmutes this reference to type `R` with provided `metadata`.
+    ///
+    /// [`static_metadata`](crate::static_metadata) function may be used to
+    /// statically construct metadata for a struct-trait pair.
+    ///
+    /// # Safety
+    ///
+    /// See: [`ContiguousEntryRef::with_metadata`]
+    #[cfg(feature = "ptr_metadata")]
+    pub unsafe fn with_metadata<R: ?Sized>(
+        self,
+        metadata: <R as Pointee>::Metadata,
+    ) -> ContiguousEntryRef<R> {
+        unsafe {
+            ContiguousEntryRef {
+                inner: core::mem::transmute(self.inner),
+                metadata,
+            }
+        }
+    }
+
     /// Creates an immutable pointer to underlying data, blocking the current
     /// thread until base address can be read.
     ///
@@ -413,6 +434,32 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
                 inner: core::mem::transmute(self.inner),
                 metadata: (),
             })
+        }
+    }
+
+    /// Transmutes this reference to type `R` with provided `metadata`.
+    ///
+    /// [`static_metadata`](crate::static_metadata) function may be used to
+    /// statically construct metadata for a struct-trait pair.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it assumes any `T` to implement `R`,
+    /// as the original type of stored data can be erased through
+    /// [`into_dyn`](ContiguousEntryRef::into_dyn) it's impossible to check
+    /// whether the initial struct actually implements `R`.
+    ///
+    /// Calling methods from an incorrect vtable will cause undefined behavior.
+    #[cfg(feature = "ptr_metadata")]
+    pub unsafe fn with_metadata<R: ?Sized>(
+        self,
+        metadata: <R as Pointee>::Metadata,
+    ) -> ContiguousEntryRef<R> {
+        unsafe {
+            ContiguousEntryRef {
+                inner: core::mem::transmute(self.inner),
+                metadata,
+            }
         }
     }
 
