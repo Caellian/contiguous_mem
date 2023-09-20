@@ -8,15 +8,6 @@ blocks of memory.
 [![CI Status](https://img.shields.io/github/actions/workflow/status/Caellian/contiguous_mem/rust.yml?style=for-the-badge&logo=githubactions&logoColor=%23fff&label=CI)](https://github.com/Caellian/contiguous_mem/actions/workflows/rust.yml)
 [![Zlib or MIT or Apache 2.0 license](https://img.shields.io/crates/l/contiguous-mem?style=for-the-badge)](https://github.com/Caellian/contiguous_mem#license)
 
-## Stability
-
-All versions prior to 1.0.0 are not considered production ready. This is my
-first crate and there's still a lot of edge cases I didn't get a chance to
-consider yet.
-
-Prelimenary tests are in place but I don't consider them sufficient to guarantee
-correctness of behavior.
-
 ## Key Features
 
 - `no_std` support!
@@ -100,6 +91,17 @@ here for demonstration purposes.</cite>
 For more usage examples see the
 [`examples`](https://github.com/Caellian/contiguous_mem/tree/trunk/examples)
 directory.
+
+## Stability
+
+All versions prior to 1.0.0 are not considered production ready. This is my
+first crate and there's still a lot of edge cases I didn't get a chance to
+consider yet.
+
+Prelimenary tests are in place but I don't consider them sufficient to guarantee
+full correctness of behavior. I am however using this crate for development of
+another crate which allows me to do some integration testing besides just
+examples.
 
 ## Alternatives
 
