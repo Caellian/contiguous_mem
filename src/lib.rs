@@ -118,6 +118,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         &mut self,
         new_capacity: usize,
     ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
+        // TODO: (0.5.0) Change resize return type to *mut ()
         if new_capacity == Impl::get_capacity(&self.capacity) {
             return Ok(None);
         }
@@ -134,6 +135,44 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         };
 
         Ok(moved)
+    }
+
+    /// Reserves exactly `additional` bytes.
+    /// After calling this function, new capacity will be equal to:
+    /// `self.get_capacity() + additional`.
+    ///
+    /// # Errors
+    ///
+    /// See: [`ContiguousMemoryStorage::resize`]
+    pub fn reserve(&mut self, additional: usize) -> Result<Option<*mut ()>, ContiguousMemoryError> {
+        self.resize(self.get_capacity() + additional)
+            .map(|it| it.map(|ptr| ptr as *mut ()))
+    }
+
+    /// Reserves exactly additional bytes required to store a value of type `V`.
+    /// After calling this function, new capacity will be equal to:
+    /// `self.get_capacity() + size_of::<V>()`.
+    ///
+    /// # Errors
+    ///
+    /// See: [`ContiguousMemoryStorage::resize`]
+    pub fn reserve_type<V>(&mut self) -> Result<Option<*mut ()>, ContiguousMemoryError> {
+        self.reserve(size_of::<V>())
+    }
+
+    /// Reserves exactly additional bytes required to store `count` number of
+    /// values of type `V`.
+    /// After calling this function, new capacity will be equal to:
+    /// `self.get_capacity() + size_of::<V>() * count`.
+    ///
+    /// # Errors
+    ///
+    /// See: [`ContiguousMemoryStorage::resize`]
+    pub fn reserve_type_count<V>(
+        &mut self,
+        count: usize,
+    ) -> Result<Option<*mut ()>, ContiguousMemoryError> {
+        self.reserve(size_of::<V>() * count)
     }
 
     /// Stores a `value` of type `T` in the contiguous memory block and returns
