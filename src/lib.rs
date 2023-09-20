@@ -1,9 +1,6 @@
 #![allow(incomplete_features)]
 #![cfg_attr(feature = "no_std", no_std)]
-#![cfg_attr(
-    feature = "ptr_metadata",
-    feature(ptr_metadata, unsize, specialization)
-)]
+#![cfg_attr(feature = "ptr_metadata", feature(ptr_metadata, unsize))]
 #![cfg_attr(feature = "error_in_core", feature(error_in_core))]
 #![cfg_attr(doc, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
@@ -516,7 +513,9 @@ impl ContiguousMemoryStorage<ImplUnsafe> {
     /// code.
     pub unsafe fn free<T>(&mut self, position: *mut T, size: usize) {
         let pos: usize = position.sub(self.get_base() as usize) as usize;
-        if let Some(freed) = ImplUnsafe::free_region(&mut self.inner, ByteRange(pos, pos + size)) {
+        let base = ImplUnsafe::get_base(&self.base);
+        let tracker = ImplUnsafe::get_allocation_tracker(&mut self.inner);
+        if let Some(freed) = ImplUnsafe::free_region(tracker, base, ByteRange(pos, pos + size)) {
             core::ptr::drop_in_place(freed as *mut T);
         }
     }
@@ -641,7 +640,7 @@ pub(crate) mod sealed {
     impl<Impl: StorageDetails> Drop for ContiguousMemoryState<Impl> {
         fn drop(&mut self) {
             let layout = self.layout();
-            Impl::deallocate(&self.base.0, layout)
+            Impl::deallocate(&mut self.base.0, layout)
         }
     }
 }

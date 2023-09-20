@@ -166,56 +166,34 @@ pub trait RefSizeReq: Sized {}
 impl<T: Sized> RefSizeReq for T {}
 
 /// Type requirements for values that can be stored.
-#[cfg(any(feature = "ptr_metadata", feature = "leak_data"))]
 pub trait StoreRequirements: 'static {}
-#[cfg(any(feature = "ptr_metadata", feature = "leak_data"))]
 impl<T: 'static> StoreRequirements for T {}
-
-/// Type requirements for values that can be stored.
-#[cfg(all(not(feature = "ptr_metadata"), not(feature = "leak_data")))]
-pub trait StoreRequirements: Copy + 'static {}
-#[cfg(all(not(feature = "ptr_metadata"), not(feature = "leak_data")))]
-impl<T: Copy + 'static> StoreRequirements for T {}
 
 #[cfg(feature = "ptr_metadata")]
 pub use core::marker::Unsize;
 #[cfg(feature = "ptr_metadata")]
 pub use core::ptr::{DynMetadata, Pointee};
 
+/// Returns [`Pointee`] metadata for provided pair of struct `S` and some
+/// unsized type (e.g. a trait) `T`.
+///
+/// This metadata is usually a pointer to vtable of `T` implementation for
+/// `S`, but can be something else and the value is considered internal to
+/// the compiler.
 #[cfg(feature = "ptr_metadata")]
-mod pointer {
-    use super::*;
-    use core::ptr::NonNull;
+pub const fn static_metadata<S, T: ?Sized>() -> <T as Pointee>::Metadata
+where
+    S: Unsize<T>,
+{
+    let (_, metadata) = (core::ptr::NonNull::<S>::dangling().as_ptr() as *const T).to_raw_parts();
+    metadata
+}
 
-    /// Returns [`Pointee`] metadata for provided pair of struct `S` and some
-    /// unsized type (e.g. a trait) `T`.
-    /// 
-    /// This metadata is usually a pointer to vtable of `T` implementation for
-    /// `S`, but can be something else and the value is considered internal to
-    /// the compiler.
-    pub const fn static_metadata<S, T: ?Sized>() -> <T as Pointee>::Metadata
-    where
-        S: Unsize<T>,
-    {
-        let (_, metadata) = (NonNull::<S>::dangling().as_ptr() as *const T).to_raw_parts();
-        metadata
-    }
-
-    /// Allows dynamically dropping arbitrary types.
-    ///
-    /// This is a workaround for invoking [`Drop::drop`] as well as calling
-    /// compiler generated drop glue dynamically.
-    ///
-    /// Note that `do_drop` doesn't deallocate the memory.
-    pub trait HandleDrop {
-        fn do_drop(&mut self);
-    }
-    impl<T: ?Sized> HandleDrop for T {
-        #[inline(never)]
-        fn do_drop(&mut self) {
-            unsafe { core::ptr::drop_in_place(self as *mut Self) }
-        }
+pub(crate) type DropFn = fn(*mut ());
+pub(crate) const fn drop_fn<T>() -> fn(*mut ()) {
+    if core::mem::needs_drop::<T>() {
+        |ptr: *mut ()| unsafe { core::ptr::drop_in_place(ptr as *mut T) }
+    } else {
+        |_: *mut ()| {}
     }
 }
-#[cfg(feature = "ptr_metadata")]
-pub use pointer::*;

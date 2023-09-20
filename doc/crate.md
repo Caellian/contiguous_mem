@@ -18,13 +18,9 @@ directory.
 ## Features
 
 - `no_std` - enables `no_std` dependencies for atomics, mutexes and rwlocks
-- `leak_data` (**default**) - disables `Copy` requirement for stored types, but any
-  references in stored data will be leaked when the memory container is dropped
 - `debug` - enables `derive(Debug)` on structures unrelated to error handling
 - [`ptr_metadata`](https://doc.rust-lang.org/beta/unstable-book/library-features/ptr-metadata.html)
-  &lt;_nightly_&gt; - enables support for casting returned references into
-  `dyn Trait` types as well as cleaning up any types that implement `Drop` or
-  generate drop glue
+  &lt;_nightly_&gt; - allows casting references into `dyn Trait`
 - [`error_in_core`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/error-in-core.html)
   &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std`
   environment

@@ -37,19 +37,8 @@ on access.
 
 - Storing differently typed/sized data. ([example](./examples/default_impl.rs))
 - Ensuring stored data is placed adjacently in memory. ([example](./examples/game_loading.rs))
-  - Note that for this use case implementations other than unsafe aren't ideal
-    for ensuring cache locality as returned references are smart pointers which
-    will be stored elsewhere in memory. Other implementations are however useful
-    for constructing contiguous data from code which would require complicated
-    memory management otherwise.
-
-## Tradeoffs
-
-- Works without nightly but leaks data requiring Drop or drop glue, enable
-  `ptr_metadata` or disable default `leak_data` feature flag if memory leaks are
-  an issue:
-  - `ptr_metadata` requires nightly,
-  - disabling `leak_data` imposes `Copy` requirement on stored types.
+  - Note that returned references are **not** contiguous, only data they refer
+    to is.
 
 ## Getting Started
 
@@ -57,26 +46,22 @@ Add the crate to your dependencies:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.4.*" }
+contiguous_mem = { version = "0.4" }
 ```
 
 Optionally enable `no_std` feature to use in `no_std` environment:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.4.*", features = ["no_std"] }
+contiguous_mem = { version = "0.4", features = ["no_std"] }
 ```
 
 ### Features
 
 - `no_std` - enables `no_std` dependencies for atomics, mutexes and rwlocks
-- `leak_data` (**default**) - disables `Copy` requirement for stored types, but any
-  references in stored data will be leaked when the memory container is dropped
 - `debug` - enables `derive(Debug)` on structures unrelated to error handling
 - [`ptr_metadata`](https://doc.rust-lang.org/beta/unstable-book/library-features/ptr-metadata.html)
-  &lt;_nightly_&gt; - enables support for casting returned references into
-  `dyn Trait` types as well as cleaning up any types that implement `Drop` or
-  generate drop glue
+  &lt;_nightly_&gt; - allows casting references into `dyn Trait`
 - [`error_in_core`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/error-in-core.html)
   &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std`
   environment
@@ -120,6 +105,11 @@ directory.
 
 - manually managing memory to ensure contiguous placement of data
   - prone to errors and requires unsafe code
+- for storing types with uniform `Layout`, when you only need to erase their
+  types at the container level see:
+  - [`any_vec`](https://crates.io/crates/any_vec)
+  - [`type_erased_vec`](https://crates.io/crates/type_erased_vec)
+  - [`untyped_vec`](https://crates.io/crates/untyped_vec)
 - using a custom allocator like
   [blink-alloc](https://crates.io/crates/blink-alloc) to ensure contiguous
   placement of data

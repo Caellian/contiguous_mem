@@ -168,7 +168,7 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     /// returns None if `R` drop handler doesn't match the original one.
     #[cfg(feature = "ptr_metadata")]
     pub fn downcast_dyn<R: Unsize<T>>(self) -> Option<SyncContiguousEntryRef<R>> {
-        if self.inner.drop_metadata != static_metadata::<R, dyn HandleDrop>() {
+        if self.inner.drop_fn != drop_fn::<R>() {
             return None;
         }
         unsafe {
@@ -426,7 +426,7 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
     /// returns None if `R` drop handler doesn't match the original one.
     #[cfg(feature = "ptr_metadata")]
     pub fn downcast_dyn<R: Unsize<T>>(self) -> Option<ContiguousEntryRef<R>> {
-        if self.inner.drop_metadata != static_metadata::<R, dyn HandleDrop>() {
+        if self.inner.drop_fn != drop_fn::<R>() {
             return None;
         }
         unsafe {
@@ -577,8 +577,7 @@ pub(crate) mod sealed {
         pub state: Impl::StorageState,
         pub range: ByteRange,
         pub borrow_kind: Impl::BorrowLock,
-        #[cfg(feature = "ptr_metadata")]
-        pub drop_metadata: DynMetadata<dyn HandleDrop>,
+        pub drop_fn: DropFn,
         pub _phantom: PhantomData<T>,
     }
 
@@ -599,14 +598,10 @@ pub(crate) mod sealed {
 
     impl<T: ?Sized, Impl: ImplDetails> Drop for ReferenceState<T, Impl> {
         fn drop(&mut self) {
-            #[allow(unused_variables)]
-            if let Some(it) = Impl::free_region(&mut self.state, self.range) {
-                #[cfg(feature = "ptr_metadata")]
-                unsafe {
-                    let drop: *mut dyn HandleDrop =
-                        core::ptr::from_raw_parts_mut::<dyn HandleDrop>(it, self.drop_metadata);
-                    (&*drop).do_drop();
-                }
+            let base = Impl::get_base(&Impl::deref_state(&self.state).base);
+            let tracker = Impl::get_allocation_tracker(&mut self.state);
+            if let Some(it) = Impl::free_region(tracker, base, self.range) {
+                (self.drop_fn)(it);
             };
         }
     }
