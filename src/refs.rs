@@ -191,9 +191,9 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     pub unsafe fn with_metadata<R: ?Sized>(
         self,
         metadata: <R as Pointee>::Metadata,
-    ) -> ContiguousEntryRef<R> {
+    ) -> SyncContiguousEntryRef<R> {
         unsafe {
-            ContiguousEntryRef {
+            SyncContiguousEntryRef {
                 inner: core::mem::transmute(self.inner),
                 metadata,
             }

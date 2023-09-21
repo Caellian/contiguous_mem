@@ -117,8 +117,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     pub fn resize(
         &mut self,
         new_capacity: usize,
-    ) -> Result<Option<*mut u8>, ContiguousMemoryError> {
-        // TODO: (0.5.0) Change resize return type to *mut ()
+    ) -> Result<Option<*mut ()>, ContiguousMemoryError> {
         if new_capacity == Impl::get_capacity(&self.capacity) {
             return Ok(None);
         }
@@ -126,7 +125,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
         let old_capacity = Impl::get_capacity(&self.capacity);
         Impl::resize_tracker(&mut self.inner, new_capacity)?;
         let moved = match Impl::resize_container(&mut self.inner, new_capacity) {
-            Ok(it) => it,
+            Ok(it) => it.map(|ptr| ptr as *mut ()),
             Err(ContiguousMemoryError::Lock(lock_err)) if Impl::USES_LOCKS => {
                 Impl::resize_tracker(&mut self.inner, old_capacity)?;
                 return Err(ContiguousMemoryError::Lock(lock_err));
@@ -146,7 +145,6 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// See: [`ContiguousMemoryStorage::resize`]
     pub fn reserve(&mut self, additional: usize) -> Result<Option<*mut ()>, ContiguousMemoryError> {
         self.resize(self.get_capacity() + additional)
-            .map(|it| it.map(|ptr| ptr as *mut ()))
     }
 
     /// Reserves exactly additional bytes required to store a value of type `V`.

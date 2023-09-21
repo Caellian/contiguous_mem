@@ -1,6 +1,6 @@
 [package]
 name = "contiguous-mem"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 description = "A contiguous memory storage"
 authors = ["Tin Švagelj <tin.svagelj@live.com>"]
@@ -20,8 +20,11 @@ spin = { version = "0.9", optional = true }
 
 [features]
 default = []
+
 no_std = ["dep:portable-atomic", "dep:spin"]
 debug = []
+
+# Nightly features
 ptr_metadata = []
 error_in_core = []
 
