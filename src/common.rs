@@ -62,7 +62,9 @@ impl ImplBase for ImplDefault {
 /// [`SyncContiguousMemory`](crate::SyncContiguousMemory)
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "sync")]
 pub struct ImplConcurrent;
+#[cfg(feature = "sync")]
 impl ImplBase for ImplConcurrent {
     type StorageState = Arc<MemoryState<Self>>;
     type ReferenceType<T: ?Sized> = SyncContiguousEntryRef<T>;
@@ -76,7 +78,9 @@ impl ImplBase for ImplConcurrent {
 /// [`UnsafeContiguousMemory`](crate::UnsafeContiguousMemory)
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "unsafe")]
 pub struct ImplUnsafe;
+#[cfg(feature = "unsafe")]
 impl ImplBase for ImplUnsafe {
     type StorageState = MemoryState<Self>;
     type ReferenceType<T: ?Sized> = *mut T;
@@ -120,6 +124,7 @@ pub trait StorageDetails: ImplBase {
     fn deallocate(base: &mut Self::Base, layout: Layout);
 }
 
+#[cfg(feature = "sync")]
 impl StorageDetails for ImplConcurrent {
     type Base = RwLock<*mut u8>;
     type AllocationTracker = Mutex<AllocationTracker>;
@@ -204,6 +209,7 @@ impl StorageDetails for ImplDefault {
     }
 }
 
+#[cfg(feature = "unsafe")]
 impl StorageDetails for ImplUnsafe {
     type Base = *mut u8;
     type AllocationTracker = AllocationTracker;
@@ -270,6 +276,7 @@ pub trait ReferenceDetails: ImplBase {
     fn unborrow_ref<T: ?Sized>(_state: &Self::RefState<T>, _kind: BorrowKind) {}
 }
 
+#[cfg(feature = "sync")]
 impl ReferenceDetails for ImplConcurrent {
     type RefState<T: ?Sized> = Arc<ReferenceState<T, Self>>;
     type BorrowLock = RwLock<()>;
@@ -319,6 +326,7 @@ impl ReferenceDetails for ImplDefault {
     }
 }
 
+#[cfg(feature = "unsafe")]
 impl ReferenceDetails for ImplUnsafe {
     type RefState<T: ?Sized> = ();
     type BorrowLock = ();

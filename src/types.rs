@@ -3,10 +3,8 @@
 #[cfg(not(feature = "no_std"))]
 mod std_imports {
     pub use std::rc::Rc;
-    pub use std::sync::Arc;
-    pub use std::sync::Mutex;
-    pub use std::sync::MutexGuard;
-    pub use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+    #[cfg(feature = "sync")]
+    pub use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
     pub use std::alloc as allocator;
 
@@ -19,20 +17,19 @@ pub use std_imports::*;
 
 #[cfg(feature = "no_std")]
 mod nostd_imports {
-    pub use spin::Mutex;
-    pub use spin::MutexGuard;
-    pub use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+    pub use ::alloc::rc::Rc;
+    #[cfg(feature = "sync")]
+    pub use ::alloc::sync::Arc;
+    #[cfg(feature = "sync")]
+    pub use spin::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
     pub use alloc::alloc as allocator;
 
-    pub use ::alloc::vec;
-    pub use ::alloc::vec::Vec;
-
-    pub use ::alloc::rc::Rc;
-    pub use ::alloc::sync::Arc;
-
     #[cfg(feature = "sync")]
     pub use portable_atomic::{AtomicUsize, Ordering};
+
+    pub use ::alloc::vec;
+    pub use ::alloc::vec::Vec;
 }
 #[cfg(feature = "no_std")]
 pub use nostd_imports::*;
@@ -44,6 +41,7 @@ use crate::error::{LockSource, LockingError};
 ///
 /// This is necessary as [spin::Mutex::lock] doesn't return a Result but a
 /// [MutexGuard] directly.
+#[cfg(feature = "sync")]
 pub(crate) trait MutexTypesafe<T: ?Sized> {
     fn lock_named(&self, source: LockSource) -> Result<MutexGuard<T>, crate::error::LockingError>;
     fn try_lock_named(
@@ -51,7 +49,7 @@ pub(crate) trait MutexTypesafe<T: ?Sized> {
         source: LockSource,
     ) -> Result<MutexGuard<T>, crate::error::LockingError>;
 }
-#[cfg(not(feature = "no_std"))]
+#[cfg(all(feature = "sync", not(feature = "no_std")))]
 impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
     fn lock_named(&self, source: LockSource) -> Result<MutexGuard<T>, crate::error::LockingError> {
         match self.lock() {
@@ -70,7 +68,7 @@ impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
         }
     }
 }
-#[cfg(feature = "no_std")]
+#[cfg(all(feature = "sync", feature = "no_std"))]
 impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
     fn lock_named(&self, _source: LockSource) -> Result<MutexGuard<T>, LockingError> {
         Ok(self.lock())
@@ -86,13 +84,14 @@ impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
     }
 }
 
+#[cfg(feature = "sync")]
 pub(crate) trait RwLockTypesafe<T: ?Sized> {
     fn read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError>;
     fn try_read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError>;
     fn write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError>;
     fn try_write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError>;
 }
-#[cfg(not(feature = "no_std"))]
+#[cfg(all(feature = "sync", not(feature = "no_std")))]
 impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     fn read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
         match self.read() {
@@ -124,7 +123,7 @@ impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
         }
     }
 }
-#[cfg(feature = "no_std")]
+#[cfg(all(feature = "sync", feature = "no_std"))]
 impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     fn read_named(&self, _source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
         Ok(self.read())
