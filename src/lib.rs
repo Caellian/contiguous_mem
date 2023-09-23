@@ -230,9 +230,13 @@ impl ContiguousMemory {
     /// Shrinks the allocated memory to fit the currently stored data and
     /// returns the new capacity.
     pub fn shrink_to_fit(&mut self) -> usize {
-        if let Some(shrunk) = ImplDefault::shrink_tracker(&mut self.inner) {
-            self.resize(shrunk).expect("unable to shrink container");
-            shrunk
+        if let Some(new_capacity) = self.inner.tracker.borrow_mut().shrink_to_fit() {
+            let prev_base = self.inner.base.get();
+            let new_base =
+                unsafe { allocator::realloc(prev_base, self.get_layout(), new_capacity) };
+            self.inner.base.set(new_base);
+            self.inner.capacity.set(new_capacity);
+            new_capacity
         } else {
             self.inner.capacity.get()
         }
