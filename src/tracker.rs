@@ -251,6 +251,12 @@ impl AllocationTracker {
 
         Ok(())
     }
+
+    #[inline]
+    pub(crate) fn clear(&mut self) {
+        self.unused.clear();
+        self.unused.push(self.whole_range())
+    }
 }
 
 #[cfg(feature = "debug")]

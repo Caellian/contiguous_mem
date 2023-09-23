@@ -377,6 +377,49 @@ impl UnsafeContiguousMemory {
         }
     }
 
+    /// Marks the entire contents of the container as free, allowing new data
+    /// to be stored in place of previously stored data.
+    ///
+    /// This allows clearing persisted entries created with
+    /// [`ContiguousMemory::push_persisted`] and
+    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because it doesn't invalidate any previously
+    /// returned references. Storing data into the container and then trying to
+    /// access previously stored data from any existing references will cause
+    /// undefined behavior.
+    pub unsafe fn clear(&mut self) {
+        self.inner.tracker.clear();
+    }
+
+    /// Marks the provided `region` of the container as free, allowing new data
+    /// to be stored in place of previously stored data.
+    ///
+    /// This allows clearing persisted entries created with
+    /// [`ContiguousMemory::push_persisted`] and
+    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// # Errors
+    ///
+    /// This function returns a [`ContiguousMemoryError::NotContained`] error if
+    /// the provided region falls outside of the memory tracked by the
+    /// allocation tracker.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because it doesn't invalidate any previously
+    /// returned references overlapping `region`. Storing data into the
+    /// container and then trying to access previously stored data from
+    /// overlapping regions will cause undefined behavior.
+    pub unsafe fn clear_region(
+        &mut self,
+        region: ByteRange,
+    ) -> Result<(), ContiguousMemoryError> {
+        self.inner.tracker.release(region)
+    }
+
     /// Forgets this container without dropping it and returns its base address
     /// and [`Layout`].
     ///

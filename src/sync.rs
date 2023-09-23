@@ -520,6 +520,64 @@ impl SyncContiguousMemory {
         })
     }
 
+    /// Marks the entire contents of the container as free, allowing new data
+    /// to be stored in place of previously stored data.
+    ///
+    /// This allows clearing persisted entries created with
+    /// [`ContiguousMemory::push_persisted`] and
+    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// # Errors
+    ///
+    /// A [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
+    /// is returned when the allocation tracker of the container is poisoned.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because it doesn't invalidate any previously
+    /// returned references. Storing data into the container and then trying to
+    /// access previously stored data from any existing references will cause
+    /// undefined behavior.
+    pub unsafe fn clear(&mut self) -> Result<(), LockingError> {
+        self.inner
+            .tracker
+            .lock_named(LockSource::AllocationTracker)?
+            .clear();
+        Ok(())
+    }
+
+    /// Marks the provided `region` of the container as free, allowing new data
+    /// to be stored in place of previously stored data.
+    ///
+    /// This allows clearing persisted entries created with
+    /// [`ContiguousMemory::push_persisted`] and
+    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// # Errors
+    ///
+    /// A [`ContiguousMemoryError::NotContained`] error is returned if the
+    /// provided region falls outside of the memory tracked by the allocation
+    /// tracker.
+    ///
+    /// A [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
+    /// is returned when the allocation tracker of the container is poisoned.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because it doesn't invalidate any previously
+    /// returned references overlapping `region`. Storing data into the
+    /// container and then trying to access previously stored data from
+    /// overlapping regions will cause undefined behavior.
+    pub unsafe fn clear_region(
+        &mut self,
+        region: ByteRange,
+    ) -> Result<(), ContiguousMemoryError> {
+        self.inner
+            .tracker
+            .lock_named(LockSource::AllocationTracker)?
+            .release(region)
+    }
+
     /// Forgets this container without dropping it and returns its base address
     /// and [`Layout`], or a [`LockingError::Poisoned`] error if base address
     /// `RwLock` has been poisoned.

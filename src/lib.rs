@@ -56,7 +56,7 @@ use error::ContiguousMemoryError;
 /// Note that this structure is a smart abstraction over underlying data,
 /// copying it creates a copy which represents the same internal state. If you
 /// need to copy the memory region into a new container see:
-/// [`ContiguousMemoryStorage::copy_data`]
+/// [`ContiguousMemory::copy_data`]
 ///
 /// # Example
 ///
@@ -255,7 +255,7 @@ impl ContiguousMemory {
     /// a reference to it which doesn't mark the memory segment as free when
     /// dropped.
     ///
-    /// See [`ContiguousMemoryStorage::push`] for details.
+    /// See [`ContiguousMemory::push`] for details.
     pub fn push_persisted<T>(&mut self, value: T) -> ContiguousEntryRef<T> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
@@ -408,6 +408,46 @@ impl ContiguousMemory {
             #[cfg(not(feature = "ptr_metadata"))]
             _phantom: PhantomData,
         }
+    }
+
+    /// Marks the entire contents of the container as free, allowing new data
+    /// to be stored in place of previously stored data.
+    ///
+    /// This allows clearing persisted entries created with
+    /// [`ContiguousMemory::push_persisted`] and
+    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because it doesn't invalidate any previously
+    /// returned references. Storing data into the container and then trying to
+    /// access previously stored data from any existing references will cause
+    /// undefined behavior.
+    pub unsafe fn clear(&mut self) {
+        self.inner.tracker.borrow_mut().clear();
+    }
+
+    /// Marks the provided `region` of the container as free, allowing new data
+    /// to be stored in place of previously stored data.
+    ///
+    /// This allows clearing persisted entries created with
+    /// [`ContiguousMemory::push_persisted`] and
+    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// # Errors
+    ///
+    /// This function returns a [`ContiguousMemoryError::NotContained`] error if
+    /// the provided region falls outside of the memory tracked by the
+    /// allocation tracker.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because it doesn't invalidate any previously
+    /// returned references overlapping `region`. Storing data into the
+    /// container and then trying to access previously stored data from
+    /// overlapping regions will cause undefined behavior.
+    pub unsafe fn clear_region(&mut self, region: ByteRange) -> Result<(), ContiguousMemoryError> {
+        self.inner.tracker.borrow_mut().release(region)
     }
 
     /// Forgets this container without dropping it and returns its base address
@@ -687,18 +727,13 @@ mod test {
             assert_eq!(memory.get_capacity(), 24);
         }
 
-        memory.resize(4).expect("can't shrink empty storage");
+        memory.resize(5).expect("can't shrink empty storage");
         {
             memory.push_persisted(1u16);
             memory.push_persisted(2u16);
             assert_eq!(memory.can_push::<u64>(), false);
             memory.push_persisted(3u64);
-            // expecting 12, but due to alignment we're skipping two u16 slots
-            // and then double the size as remaining (aligned) 4 bytes aren't
-            // enough for u64
-
-            // FIXME: This should fail now
-            assert_eq!(memory.get_capacity(), 24);
+            assert_eq!(memory.get_capacity(), 16);
         }
     }
 
