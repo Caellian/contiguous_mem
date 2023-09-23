@@ -121,6 +121,25 @@ impl AllocationTracker {
         Some(usable)
     }
 
+    /// Returns either a start position of a free byte range at the end of the
+    /// tracker, or total size if end is occupied.
+    #[inline]
+    pub(crate) fn last_offset(&self) -> usize {
+        match self.unused.last() {
+            Some(it) if it.1 == self.size => it.0,
+            _ => self.size,
+        }
+    }
+
+    /// Returns number of tailing free bytes in the tracker
+    #[inline]
+    pub(crate) fn tailing_free_bytes(&self) -> usize {
+        match self.unused.last() {
+            Some(it) if it.1 == self.size => it.len(),
+            _ => 0,
+        }
+    }
+
     /// Tries marking the provided memory `region` as not free, returning one
     /// of the following errors if that's not possible:
     ///

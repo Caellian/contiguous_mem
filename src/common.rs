@@ -9,26 +9,21 @@
 //! be reflected in version numbers.
 
 use core::{
-    alloc::{Layout, LayoutError},
+    alloc::Layout,
     cell::{Cell, RefCell, RefMut},
     mem::size_of,
     ptr::null_mut,
 };
 
+use crate::types::*;
 use core::marker::PhantomData;
-
-#[cfg(feature = "no_std")]
-use portable_atomic::{AtomicUsize, Ordering};
-#[cfg(not(feature = "no_std"))]
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{
     error::{ContiguousMemoryError, LockSource, LockingError},
     range::ByteRange,
     refs::{sealed::*, ContiguousEntryRef, SyncContiguousEntryRef},
     tracker::AllocationTracker,
-    types::*,
-    BaseLocation, ContiguousMemoryState,
+    BaseLocation, MemoryState,
 };
 
 /// Implementation details shared between [storage](StorageDetails) and
@@ -46,10 +41,6 @@ pub trait ImplBase: Sized {
 
     /// The type representing the allocation tracker reference type.
     type ATGuard<'a>;
-
-    /// Indicates whether locks are used for synchronization, allowing the
-    /// compiler to easily optimize away branches involving them.
-    const USES_LOCKS: bool = false;
 }
 
 /// Implementation that's not thread-safe but performs faster as it avoids
@@ -60,7 +51,7 @@ pub trait ImplBase: Sized {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplDefault;
 impl ImplBase for ImplDefault {
-    type StorageState = Rc<ContiguousMemoryState<Self>>;
+    type StorageState = Rc<MemoryState<Self>>;
     type ReferenceType<T: ?Sized> = ContiguousEntryRef<T>;
     type LockResult<T> = T;
     type ATGuard<'a> = RefMut<'a, AllocationTracker>;
@@ -75,12 +66,10 @@ impl ImplBase for ImplDefault {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplConcurrent;
 impl ImplBase for ImplConcurrent {
-    type StorageState = Arc<ContiguousMemoryState<Self>>;
+    type StorageState = Arc<MemoryState<Self>>;
     type ReferenceType<T: ?Sized> = SyncContiguousEntryRef<T>;
     type LockResult<T> = Result<T, LockingError>;
     type ATGuard<'a> = MutexGuard<'a, AllocationTracker>;
-
-    const USES_LOCKS: bool = true;
 }
 
 /// Implementation which provides direct (unsafe) access to stored entries.
@@ -91,7 +80,7 @@ impl ImplBase for ImplConcurrent {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplUnsafe;
 impl ImplBase for ImplUnsafe {
-    type StorageState = ContiguousMemoryState<Self>;
+    type StorageState = MemoryState<Self>;
     type ReferenceType<T: ?Sized> = *mut T;
     type LockResult<T> = T;
     type ATGuard<'a> = &'a mut AllocationTracker;
@@ -112,15 +101,8 @@ pub trait StorageDetails: ImplBase {
     /// The type representing result of storing data.
     type PushResult<T>;
 
-    /// Builds a new internal state from provided parameters
-    fn build_state(
-        base: *mut u8,
-        capacity: usize,
-        alignment: usize,
-    ) -> Result<Self::StorageState, LayoutError>;
-
     /// Dereferences the inner state smart pointer and returns it by reference.
-    fn deref_state(state: &Self::StorageState) -> &ContiguousMemoryState<Self>;
+    fn deref_state(state: &Self::StorageState) -> &MemoryState<Self>;
 
     /// Retrieves the base pointer from the base instance.
     fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8>;
@@ -132,9 +114,9 @@ pub trait StorageDetails: ImplBase {
     fn get_capacity(capacity: &Self::SizeType) -> usize;
 
     /// Returns a writable reference to AllocationTracker.
-    fn get_allocation_tracker<'a>(
-        state: &'a mut Self::StorageState,
-    ) -> Self::LockResult<Self::ATGuard<'a>>;
+    fn get_allocation_tracker(
+        state: &mut Self::StorageState,
+    ) -> Self::LockResult<Self::ATGuard<'_>>;
 
     /// Resizes and reallocates the base memory according to new capacity.
     fn resize_container(
@@ -173,23 +155,8 @@ impl StorageDetails for ImplConcurrent {
     type SizeType = AtomicUsize;
     type PushResult<T> = Result<Self::ReferenceType<T>, LockingError>;
 
-    fn build_state(
-        base: *mut u8,
-        capacity: usize,
-        alignment: usize,
-    ) -> Result<Self::StorageState, LayoutError> {
-        let layout = Layout::from_size_align(capacity, alignment)?;
-
-        Ok(Arc::new(ContiguousMemoryState {
-            base: BaseLocation(RwLock::new(base)),
-            capacity: AtomicUsize::new(layout.size()),
-            alignment: layout.align(),
-            tracker: Mutex::new(AllocationTracker::new(capacity)),
-        }))
-    }
-
     #[inline]
-    fn deref_state(state: &Self::StorageState) -> &ContiguousMemoryState<Self> {
+    fn deref_state(state: &Self::StorageState) -> &MemoryState<Self> {
         state
     }
 
@@ -211,9 +178,9 @@ impl StorageDetails for ImplConcurrent {
     }
 
     #[inline]
-    fn get_allocation_tracker<'a>(
-        state: &'a mut Self::StorageState,
-    ) -> Self::LockResult<Self::ATGuard<'a>> {
+    fn get_allocation_tracker(
+        state: &mut Self::StorageState,
+    ) -> Self::LockResult<Self::ATGuard<'_>> {
         state.tracker.lock_named(LockSource::AllocationTracker)
     }
 
@@ -284,23 +251,8 @@ impl StorageDetails for ImplDefault {
     type SizeType = Cell<usize>;
     type PushResult<T> = ContiguousEntryRef<T>;
 
-    fn build_state(
-        base: *mut u8,
-        capacity: usize,
-        alignment: usize,
-    ) -> Result<Self::StorageState, LayoutError> {
-        let layout: Layout = Layout::from_size_align(capacity, alignment)?;
-
-        Ok(Rc::new(ContiguousMemoryState {
-            base: BaseLocation(Cell::new(base)),
-            capacity: Cell::new(layout.size()),
-            alignment: layout.align(),
-            tracker: RefCell::new(AllocationTracker::new(capacity)),
-        }))
-    }
-
     #[inline]
-    fn deref_state(state: &Self::StorageState) -> &ContiguousMemoryState<Self> {
+    fn deref_state(state: &Self::StorageState) -> &MemoryState<Self> {
         state
     }
 
@@ -320,9 +272,9 @@ impl StorageDetails for ImplDefault {
     }
 
     #[inline]
-    fn get_allocation_tracker<'a>(
-        state: &'a mut Self::StorageState,
-    ) -> Self::LockResult<Self::ATGuard<'a>> {
+    fn get_allocation_tracker(
+        state: &mut Self::StorageState,
+    ) -> Self::LockResult<Self::ATGuard<'_>> {
         state.tracker.borrow_mut()
     }
 
@@ -384,22 +336,8 @@ impl StorageDetails for ImplUnsafe {
     type SizeType = usize;
     type PushResult<T> = Result<*mut T, ContiguousMemoryError>;
 
-    fn build_state(
-        base: *mut u8,
-        capacity: usize,
-        alignment: usize,
-    ) -> Result<Self::StorageState, LayoutError> {
-        let layout = Layout::from_size_align(capacity, alignment)?;
-        Ok(ContiguousMemoryState {
-            base: BaseLocation(base),
-            capacity: layout.size(),
-            alignment: layout.align(),
-            tracker: AllocationTracker::new(capacity),
-        })
-    }
-
     #[inline]
-    fn deref_state(state: &Self::StorageState) -> &ContiguousMemoryState<Self> {
+    fn deref_state(state: &Self::StorageState) -> &MemoryState<Self> {
         state
     }
 
@@ -419,9 +357,9 @@ impl StorageDetails for ImplUnsafe {
     }
 
     #[inline]
-    fn get_allocation_tracker<'a>(
-        state: &'a mut Self::StorageState,
-    ) -> Self::LockResult<Self::ATGuard<'a>> {
+    fn get_allocation_tracker(
+        state: &mut Self::StorageState,
+    ) -> Self::LockResult<Self::ATGuard<'_>> {
         &mut state.tracker
     }
 
@@ -497,7 +435,7 @@ pub trait ReferenceDetails: ImplBase {
     ) -> Option<*mut ()>;
 
     /// Builds a reference for the stored data.
-    fn build_ref<T: StoreRequirements>(
+    fn build_ref<T>(
         state: &Self::StorageState,
         addr: *mut T,
         range: ByteRange,
@@ -531,7 +469,7 @@ impl ReferenceDetails for ImplConcurrent {
         }
     }
 
-    fn build_ref<T: StoreRequirements>(
+    fn build_ref<T>(
         state: &Self::StorageState,
         _addr: *mut T,
         range: ByteRange,
@@ -567,7 +505,7 @@ impl ReferenceDetails for ImplDefault {
         unsafe { Some(base.add(range.0) as *mut ()) }
     }
 
-    fn build_ref<T: StoreRequirements>(
+    fn build_ref<T>(
         state: &Self::StorageState,
         _addr: *mut T,
         range: ByteRange,
@@ -622,26 +560,26 @@ impl ReferenceDetails for ImplUnsafe {
 }
 
 pub trait StoreDataDetails: StorageDetails {
-    unsafe fn push_raw<T: StoreRequirements>(
+    unsafe fn push_raw<T>(
         state: &mut Self::StorageState,
         data: *const T,
         layout: Layout,
     ) -> Self::PushResult<T>;
 
-    unsafe fn push_raw_persisted<T: StoreRequirements>(
+    unsafe fn push_raw_persisted<T>(
         state: &mut Self::StorageState,
         data: *const T,
         layout: Layout,
     ) -> Self::PushResult<T>;
 
-    fn assume_stored<T: StoreRequirements>(
+    fn assume_stored<T>(
         state: &Self::StorageState,
         position: usize,
     ) -> Self::LockResult<Self::ReferenceType<T>>;
 }
 
 impl StoreDataDetails for ImplConcurrent {
-    unsafe fn push_raw<T: StoreRequirements>(
+    unsafe fn push_raw<T>(
         state: &mut Self::StorageState,
         data: *const T,
         layout: Layout,
@@ -687,7 +625,7 @@ impl StoreDataDetails for ImplConcurrent {
     }
 
     #[inline(always)]
-    unsafe fn push_raw_persisted<T: StoreRequirements>(
+    unsafe fn push_raw_persisted<T>(
         state: &mut Self::StorageState,
         data: *const T,
         layout: Layout,
@@ -703,7 +641,7 @@ impl StoreDataDetails for ImplConcurrent {
     }
 
     #[inline(always)]
-    fn assume_stored<T: StoreRequirements>(
+    fn assume_stored<T>(
         state: &Self::StorageState,
         position: usize,
     ) -> Result<SyncContiguousEntryRef<T>, LockingError> {
@@ -722,7 +660,7 @@ impl StoreDataDetails for ImplConcurrent {
 }
 
 impl StoreDataDetails for ImplDefault {
-    unsafe fn push_raw<T: StoreRequirements>(
+    unsafe fn push_raw<T>(
         state: &mut Self::StorageState,
         data: *const T,
         layout: Layout,
@@ -762,7 +700,7 @@ impl StoreDataDetails for ImplDefault {
     }
 
     #[inline(always)]
-    unsafe fn push_raw_persisted<T: StoreRequirements>(
+    unsafe fn push_raw_persisted<T>(
         state: &mut Self::StorageState,
         data: *const T,
         layout: Layout,
@@ -774,10 +712,7 @@ impl StoreDataDetails for ImplDefault {
     }
 
     #[inline(always)]
-    fn assume_stored<T: StoreRequirements>(
-        state: &Self::StorageState,
-        position: usize,
-    ) -> ContiguousEntryRef<T> {
+    fn assume_stored<T>(state: &Self::StorageState, position: usize) -> ContiguousEntryRef<T> {
         let addr = unsafe { state.base.get().add(position) };
         ImplDefault::build_ref(state, addr as *mut T, ByteRange(position, size_of::<T>()))
     }
@@ -786,7 +721,7 @@ impl StoreDataDetails for ImplDefault {
 impl StoreDataDetails for ImplUnsafe {
     /// Returns a raw pointer (`*mut T`) to the stored value or an error if no
     /// free regions remain
-    unsafe fn push_raw<T: StoreRequirements>(
+    unsafe fn push_raw<T>(
         state: &mut Self::StorageState,
         data: *const T,
         layout: Layout,
@@ -806,7 +741,7 @@ impl StoreDataDetails for ImplUnsafe {
         Ok(ImplUnsafe::build_ref(state, addr as *mut T, range))
     }
 
-    unsafe fn push_raw_persisted<T: StoreRequirements>(
+    unsafe fn push_raw_persisted<T>(
         _state: &mut Self::StorageState,
         _data: *const T,
         _layout: Layout,
@@ -815,7 +750,7 @@ impl StoreDataDetails for ImplUnsafe {
     }
 
     #[inline(always)]
-    fn assume_stored<T: StoreRequirements>(state: &Self::StorageState, position: usize) -> *mut T {
+    fn assume_stored<T>(state: &Self::StorageState, position: usize) -> *mut T {
         let addr = unsafe { state.base.add(position) };
         ImplUnsafe::build_ref(
             state,

@@ -9,7 +9,7 @@ use core::{
 };
 
 use crate::{
-    details::{ImplConcurrent, ImplDefault, ImplDetails, StorageDetails},
+    common::{ImplConcurrent, ImplDefault, ImplDetails, StorageDetails},
     error::{LockSource, LockingError, RegionBorrowedError},
     range::ByteRange,
     types::*,

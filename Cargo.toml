@@ -19,10 +19,14 @@ portable-atomic = { version = "1", default-features = false, optional = true }
 spin = { version = "0.9", optional = true }
 
 [features]
-default = []
+default = ["sync", "unsafe"]
 
 no_std = ["dep:portable-atomic", "dep:spin"]
 debug = []
+
+# Implementations
+sync = []
+unsafe = []
 
 # Nightly features
 ptr_metadata = []

@@ -9,29 +9,40 @@
 #[cfg(feature = "no_std")]
 extern crate alloc;
 
-mod details;
+mod common;
 pub mod error;
 pub mod range;
 pub mod refs;
 pub mod tracker;
 mod types;
 
-use details::*;
-pub use details::{ImplConcurrent, ImplDefault, ImplUnsafe};
+#[cfg(feature = "sync")]
+mod sync;
+#[cfg(feature = "sync")]
+pub use sync::SyncContiguousMemory;
+
+#[cfg(feature = "unsafe")]
+mod unsafe_impl;
+#[cfg(feature = "unsafe")]
+pub use unsafe_impl::UnsafeContiguousMemory;
+
+use common::*;
+use common::{ImplConcurrent, ImplDefault, ImplUnsafe};
 pub use range::ByteRange;
-use refs::sealed::EntryRef;
 pub use refs::{CERef, ContiguousEntryRef, SCERef, SyncContiguousEntryRef};
 #[cfg(feature = "ptr_metadata")]
 pub use types::static_metadata;
 use types::*;
 
+use core::cell::Cell;
+use core::marker::PhantomData;
 use core::{
     alloc::{Layout, LayoutError},
     mem::{size_of, ManuallyDrop},
     ops::Deref,
 };
 
-use error::{ContiguousMemoryError, LockingError};
+use error::ContiguousMemoryError;
 
 /// A memory container for efficient allocation and storage of contiguous data.
 ///
@@ -46,11 +57,18 @@ use error::{ContiguousMemoryError, LockingError};
 /// copying it creates a copy which represents the same internal state. If you
 /// need to copy the memory region into a new container see:
 /// [`ContiguousMemoryStorage::copy_data`]
-pub struct ContiguousMemoryStorage<Impl: ImplDetails = ImplDefault> {
-    inner: Impl::StorageState,
+///
+/// # Example
+///
+/// ```rust
+#[doc = include_str!("../examples/default_impl.rs")]
+/// ```
+#[derive(Clone)]
+pub struct ContiguousMemory {
+    inner: Rc<MemoryState<ImplDefault>>,
 }
 
-impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
+impl ContiguousMemory {
     /// Creates a new `ContiguousMemory` instance with the specified `capacity`,
     /// aligned as platform dependant alignment of `usize`.
     pub fn new(capacity: usize) -> Self {
@@ -63,21 +81,23 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     pub fn new_aligned(capacity: usize, alignment: usize) -> Result<Self, LayoutError> {
         let layout = Layout::from_size_align(capacity, alignment)?;
         let base = unsafe { allocator::alloc(layout) };
-        Ok(ContiguousMemoryStorage {
-            inner: Impl::build_state(base, capacity, alignment)?,
+        Ok(Self {
+            inner: MemoryState::new(base, capacity, alignment),
         })
     }
 
     /// Creates a new `ContiguousMemory` instance with the provided `layout`.
     pub fn new_for_layout(layout: Layout) -> Self {
         let base = unsafe { allocator::alloc(layout) };
-        unsafe {
-            // SAFETY: Impl::build_state won't return a LayoutError because
-            // we're constructing it from a provided layout argument.
-            ContiguousMemoryStorage {
-                inner: Impl::build_state(base, layout.size(), layout.align()).unwrap_unchecked(),
-            }
+        Self {
+            inner: MemoryState::new(base, layout.size(), layout.align()),
         }
+    }
+
+    /// Returns the base address of the allocated memory.
+    #[inline]
+    pub fn get_base(&self) -> *const () {
+        self.inner.base.get() as *const ()
     }
 
     /// Returns the current capacity of the memory container.
@@ -85,13 +105,46 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// The capacity represents the size of the memory block that has been
     /// allocated for storing data. It may be larger than the amount of data
     /// currently stored within the container.
+    #[inline]
     pub fn get_capacity(&self) -> usize {
-        Impl::get_capacity(&self.capacity)
+        self.inner.capacity.get()
+    }
+
+    /// Returns the alignment of the memory container.
+    #[inline]
+    pub fn get_align(&self) -> usize {
+        self.inner.alignment
     }
 
     /// Returns the layout of the memory region containing stored data.
     pub fn get_layout(&self) -> Layout {
-        Impl::deref_state(&self.inner).layout()
+        unsafe {
+            // SAFETY: Constructor would panic if Layout was invalid.
+            Layout::from_size_align_unchecked(self.inner.capacity.get(), self.inner.alignment)
+        }
+    }
+
+    /// Returns `true` if provided generic type `T` can be stored without
+    /// growing the container.
+    pub fn can_push<T>(&self) -> bool {
+        let layout = Layout::new::<T>();
+        let tracker = self.inner.tracker.borrow();
+        tracker.peek_next(layout).is_some()
+    }
+
+    /// Returns `true` if the provided `value` can be stored without growing the
+    /// container.
+    pub fn can_push_value<T>(&self, value: &T) -> bool {
+        let layout = Layout::for_value(value);
+        let tracker = self.inner.tracker.borrow();
+        tracker.peek_next(layout).is_some()
+    }
+
+    /// Returns `true` if the provided `layout` can be stored without growing
+    /// the container.
+    pub fn can_push_layout(&self, layout: Layout) -> bool {
+        let tracker = self.inner.tracker.borrow();
+        tracker.peek_next(layout).is_some()
     }
 
     /// Resizes the memory container to the specified `new_capacity`, optionally
@@ -102,110 +155,95 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// tailing memory space, but growing it can move the data in memory to find
     /// a location that can fit it.
     ///
-    /// [Unsafe implementation](ImplUnsafe) should match on the returned value
-    /// and update any existing pointers accordingly.
-    ///
     /// # Errors
     ///
     /// [`ContiguousMemoryError::Unshrinkable`] error is returned when
     /// attempting to shrink the memory container, but previously stored data
     /// prevents the container from being shrunk to the desired capacity.
-    ///
-    /// In a concurrent implementation [`ContiguousMemoryError::Lock`] is
-    /// returned if the mutex holding the base address or the
-    /// [`AllocationTracker`](crate::tracker::AllocationTracker) is poisoned.
     pub fn resize(
         &mut self,
         new_capacity: usize,
-    ) -> Result<Option<*mut ()>, ContiguousMemoryError> {
-        if new_capacity == Impl::get_capacity(&self.capacity) {
+    ) -> Result<Option<*const ()>, ContiguousMemoryError> {
+        let old_capacity = self.inner.capacity.get();
+        if new_capacity == old_capacity {
             return Ok(None);
         }
 
-        let old_capacity = Impl::get_capacity(&self.capacity);
-        Impl::resize_tracker(&mut self.inner, new_capacity)?;
-        let moved = match Impl::resize_container(&mut self.inner, new_capacity) {
-            Ok(it) => it.map(|ptr| ptr as *mut ()),
-            Err(ContiguousMemoryError::Lock(lock_err)) if Impl::USES_LOCKS => {
-                Impl::resize_tracker(&mut self.inner, old_capacity)?;
-                return Err(ContiguousMemoryError::Lock(lock_err));
-            }
-            Err(other) => return Err(other),
-        };
-
-        Ok(moved)
+        self.inner.tracker.borrow_mut().resize(new_capacity)?;
+        let layout =
+            unsafe { Layout::from_size_align_unchecked(old_capacity, self.inner.alignment) };
+        let prev_base = self.inner.base.get();
+        let new_base = unsafe { allocator::realloc(prev_base, layout, new_capacity) };
+        self.inner.base.set(new_base);
+        self.inner.capacity.set(new_capacity);
+        Ok(if new_base != prev_base {
+            Some(new_base as *const ())
+        } else {
+            None
+        })
     }
 
-    /// Reserves exactly `additional` bytes.
+    /// Reserves `additional` bytes.
     /// After calling this function, new capacity will be equal to:
     /// `self.get_capacity() + additional`.
-    ///
-    /// # Errors
-    ///
-    /// See: [`ContiguousMemoryStorage::resize`]
-    pub fn reserve(&mut self, additional: usize) -> Result<Option<*mut ()>, ContiguousMemoryError> {
+    #[inline]
+    pub fn reserve(&mut self, additional: usize) -> Option<*const ()> {
         self.resize(self.get_capacity() + additional)
+            .expect("unable to grow the container")
     }
 
-    /// Reserves exactly additional bytes required to store a value of type `V`.
+    /// Reserves additional bytes required to store a value with provided
+    /// `layout` while keeping it aligned (required padding bytes at the end of
+    /// the container will be included).
+    ///
+    /// After calling this function, new capacity will be equal to:
+    /// `self.get_capacity() + padding + size_of::<V>()`.
+    pub fn reserve_layout(&mut self, layout: Layout) -> Option<*const ()> {
+        let last = unsafe { self.inner.base.get().add(self.inner.tracker.borrow().len()) };
+        let align_offset = last.align_offset(layout.align());
+        self.reserve(align_offset + layout.size())
+    }
+
+    /// Reserves additional bytes required to store a value of type `V`.
     /// After calling this function, new capacity will be equal to:
     /// `self.get_capacity() + size_of::<V>()`.
-    ///
-    /// # Errors
-    ///
-    /// See: [`ContiguousMemoryStorage::resize`]
-    pub fn reserve_type<V>(&mut self) -> Result<Option<*mut ()>, ContiguousMemoryError> {
-        self.reserve(size_of::<V>())
+    #[inline]
+    pub fn reserve_type<V>(&mut self) -> Option<*const ()> {
+        self.reserve_layout(Layout::new::<V>())
     }
 
-    /// Reserves exactly additional bytes required to store `count` number of
+    /// Reserves additional bytes required to store `count` number of
     /// values of type `V`.
     /// After calling this function, new capacity will be equal to:
-    /// `self.get_capacity() + size_of::<V>() * count`.
-    ///
-    /// # Errors
-    ///
-    /// See: [`ContiguousMemoryStorage::resize`]
-    pub fn reserve_type_count<V>(
-        &mut self,
-        count: usize,
-    ) -> Result<Option<*mut ()>, ContiguousMemoryError> {
-        self.reserve(size_of::<V>() * count)
+    /// `self.get_capacity() + leading_padding + size_of::<V>() * count  + internal_padding * (count - 1)`.
+    pub fn reserve_type_count<V>(&mut self, count: usize) -> Option<*const ()> {
+        let layout = Layout::new::<V>();
+        let last = unsafe { self.inner.base.get().add(self.inner.tracker.borrow().len()) };
+        let align_offset = last.align_offset(layout.align());
+        let inner_padding = unsafe {
+            last.add(align_offset + layout.size())
+                .align_offset(layout.align())
+        };
+        self.reserve(align_offset + layout.size() * count + inner_padding * count.saturating_sub(1))
+    }
+
+    /// Shrinks the allocated memory to fit the currently stored data and
+    /// returns the new capacity.
+    pub fn shrink_to_fit(&mut self) -> usize {
+        if let Some(shrunk) = ImplDefault::shrink_tracker(&mut self.inner) {
+            self.resize(shrunk).expect("unable to shrink container");
+            shrunk
+        } else {
+            self.inner.capacity.get()
+        }
     }
 
     /// Stores a `value` of type `T` in the contiguous memory block and returns
-    /// a reference or a pointer pointing to it.
+    /// a [`reference`](ContiguousEntryRef) to it.
     ///
     /// Value type argument `T` is used to deduce type size and returned
     /// reference dropping behavior.
-    ///
-    /// Returned value is implementation specific:
-    ///
-    /// | Implementation | Result | Alias |
-    /// |-|:-:|:-:|
-    /// |[Default](ImplDefault)|[`ContiguousEntryRef<T>`](refs::ContiguousEntryRef)|[`CERef`](refs::CERef)|
-    /// |[Concurrent](ImplConcurrent)|[`SyncContiguousEntryRef<T>`](refs::SyncContiguousEntryRef)|[`SCERef`](refs::SCERef)|
-    /// |[Unsafe](ImplUnsafe)|`*mut T`|_N/A_|
-    ///
-    /// # Errors
-    ///
-    /// ## Concurrent implementation
-    ///
-    /// Concurrent implementation returns a
-    /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
-    /// when the `AllocationTracker` associated with the memory container is
-    /// poisoned.
-    ///
-    /// ## Unsafe implementation
-    ///
-    /// Unsafe implementation returns a [`ContiguousMemoryError::NoStorageLeft`]
-    /// indicating that the container couldn't store the provided data with
-    /// current size.
-    ///
-    /// Memory block can still be grown by calling [`ContiguousMemory::resize`],
-    /// but it can't be done automatically as that would invalidate all the
-    /// existing pointers without any indication.
-    pub fn push<T: StoreRequirements>(&mut self, value: T) -> Impl::PushResult<T> {
+    pub fn push<T>(&mut self, value: T) -> ContiguousEntryRef<T> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
         let pos = &mut *data as *mut T;
@@ -218,10 +256,7 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// dropped.
     ///
     /// See [`ContiguousMemoryStorage::push`] for details.
-    pub fn push_persisted<T: StoreRequirements>(&mut self, value: T) -> Impl::PushResult<T>
-    where
-        Impl::ReferenceType<T>: EntryRef,
-    {
+    pub fn push_persisted<T>(&mut self, value: T) -> ContiguousEntryRef<T> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
         let pos = &mut *data as *mut T;
@@ -258,26 +293,77 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     ///
     /// Further, it also allows escaping type drop glue because it takes type
     /// [`Layout`] as a separate argument.
-    pub unsafe fn push_raw<T: StoreRequirements>(
-        &mut self,
-        data: *const T,
-        layout: Layout,
-    ) -> Impl::PushResult<T> {
-        Impl::push_raw(&mut self.inner, data, layout)
+    pub unsafe fn push_raw<T>(&mut self, data: *const T, layout: Layout) -> ContiguousEntryRef<T> {
+        let mut tracker = self.inner.tracker.borrow_mut();
+
+        let range = loop {
+            let base = self.get_base() as usize;
+            match tracker.take_next(base, layout) {
+                Ok(taken) => {
+                    let found = (taken.0 + base) as *mut u8;
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
+                    }
+                    break taken;
+                }
+                Err(ContiguousMemoryError::NoStorageLeft) => {
+                    let curr_capacity = self.inner.capacity.get();
+
+                    let prev_base = self.inner.base.get();
+                    let start_free = prev_base.add(tracker.last_offset());
+                    let padding = start_free.align_offset(layout.align());
+                    let increment = padding + layout.size() - tracker.tailing_free_bytes();
+
+                    let new_capacity = curr_capacity
+                        .saturating_mul(2)
+                        .max(curr_capacity + increment);
+
+                    tracker
+                        .resize(new_capacity)
+                        .expect("unable to grow allocation tracker");
+
+                    let storage_layout = unsafe {
+                        Layout::from_size_align_unchecked(curr_capacity, self.inner.alignment)
+                    };
+                    let new_base =
+                        unsafe { allocator::realloc(prev_base, storage_layout, new_capacity) };
+                    self.inner.base.set(new_base);
+                    self.inner.capacity.set(new_capacity);
+                }
+                Err(other) => unreachable!(
+                    "reached unexpected error while looking for next region to store data: {:?}",
+                    other
+                ),
+            }
+        };
+
+        ContiguousEntryRef {
+            inner: Rc::new(ReferenceState {
+                state: self.inner.clone(),
+                range,
+                borrow_kind: Cell::new(BorrowState::Read(0)),
+                drop_fn: drop_fn::<T>(),
+                _phantom: PhantomData,
+            }),
+            #[cfg(feature = "ptr_metadata")]
+            metadata: (),
+            #[cfg(not(feature = "ptr_metadata"))]
+            _phantom: PhantomData,
+        }
     }
 
     /// Variant of [`push_raw`](ContiguousMemory::push_raw) which returns a
     /// reference that doesn't mark the used memory segment as free when
     /// dropped.
-    pub unsafe fn push_raw_persisted<T: StoreRequirements>(
+    pub unsafe fn push_raw_persisted<T>(
         &mut self,
         data: *const T,
         layout: Layout,
-    ) -> Impl::PushResult<T>
-    where
-        Impl::ReferenceType<T>: EntryRef,
-    {
-        Impl::push_raw_persisted(&mut self.inner, data, layout)
+    ) -> ContiguousEntryRef<T> {
+        let value = self.push_raw(data, layout);
+        let result = value.clone();
+        core::mem::forget(value.inner);
+        result
     }
 
     /// Assumes value is stored at the provided _relative_ `position` in
@@ -308,48 +394,19 @@ impl<Impl: ImplDetails> ContiguousMemoryStorage<Impl> {
     /// This functions isn't unsafe because creating an invalid pointer isn't
     /// considered unsafe. Responsibility for guaranteeing safety falls on
     /// code that's dereferencing the pointer.
-    pub fn assume_stored<T: StoreRequirements>(
-        &self,
-        position: usize,
-    ) -> Impl::LockResult<Impl::ReferenceType<T>> {
-        Impl::assume_stored(&self.inner, position)
-    }
-}
-
-impl ContiguousMemoryStorage<ImplDefault> {
-    /// Returns the base address of the allocated memory.
-    pub fn get_base(&self) -> *const () {
-        ImplDefault::get_base(&self.base) as *const ()
-    }
-
-    /// Returns `true` if provided generic type `T` can be stored without
-    /// growing the container.
-    pub fn can_push<T: StoreRequirements>(&self) -> bool {
-        let layout = Layout::new::<T>();
-        ImplDefault::peek_next(&self.inner, layout).is_some()
-    }
-
-    /// Returns `true` if the provided `value` can be stored without growing the
-    /// container.
-    pub fn can_push_value<T: StoreRequirements>(&self, value: &T) -> bool {
-        let layout = Layout::for_value(value);
-        ImplDefault::peek_next(&self.inner, layout).is_some()
-    }
-
-    /// Returns `true` if the provided `layout` can be stored without growing
-    /// the container.
-    pub fn can_push_layout(&self, layout: Layout) -> bool {
-        ImplDefault::peek_next(&self.inner, layout).is_some()
-    }
-
-    /// Shrinks the allocated memory to fit the currently stored data and
-    /// returns the new capacity.
-    pub fn shrink_to_fit(&mut self) -> usize {
-        if let Some(shrunk) = ImplDefault::shrink_tracker(&mut self.inner) {
-            self.resize(shrunk).expect("unable to shrink container");
-            shrunk
-        } else {
-            self.capacity.get()
+    pub fn assume_stored<T>(&self, position: usize) -> ContiguousEntryRef<T> {
+        ContiguousEntryRef {
+            inner: Rc::new(ReferenceState {
+                state: self.inner.clone(),
+                range: ByteRange(position, position + size_of::<T>()),
+                borrow_kind: Cell::new(BorrowState::Read(0)),
+                drop_fn: drop_fn::<T>(),
+                _phantom: PhantomData,
+            }),
+            #[cfg(feature = "ptr_metadata")]
+            metadata: (),
+            #[cfg(not(feature = "ptr_metadata"))]
+            _phantom: PhantomData,
         }
     }
 
@@ -372,198 +429,7 @@ impl ContiguousMemoryStorage<ImplDefault> {
     /// behavior.
     /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
     pub fn forget(self) -> (*const (), Layout) {
-        let base = ImplDefault::get_base(&self.base);
-        let layout = self.get_layout();
-        core::mem::forget(self);
-        (base as *const (), layout)
-    }
-}
-
-impl ContiguousMemoryStorage<ImplConcurrent> {
-    /// Returns the base address of the allocated memory or a
-    /// [`LockingError::Poisoned`] error if the mutex holding the base address
-    /// has been poisoned.
-    ///
-    /// This function will block the current thread until base address RwLock
-    /// doesn't become readable.
-    pub fn get_base(&self) -> Result<*const (), LockingError> {
-        unsafe { core::mem::transmute(ImplConcurrent::get_base(&self.base)) }
-    }
-
-    /// Returns `true` if provided generic type `T` can be stored without
-    /// growing the container or a [`LockingError::Poisoned`] error if
-    /// allocation tracker mutex has been poisoned.
-    ///
-    /// This function will block the current thread until internal allocation
-    /// tracked doesn't become available.
-    pub fn can_push<T: StoreRequirements>(&self) -> Result<bool, LockingError> {
-        let layout = Layout::new::<T>();
-        ImplConcurrent::peek_next(&self.inner, layout).map(|it| it.is_some())
-    }
-
-    /// Returns `true` if the provided `value` can be stored without growing the
-    /// container or a [`LockingError::Poisoned`] error if allocation tracker
-    /// mutex has been poisoned.
-    ///
-    /// This function will block the current thread until internal allocation
-    /// tracked doesn't become available.
-    pub fn can_push_value<T: StoreRequirements>(&self, value: &T) -> Result<bool, LockingError> {
-        let layout = Layout::for_value(value);
-        ImplConcurrent::peek_next(&self.inner, layout).map(|it| it.is_some())
-    }
-
-    /// Returns `true` if the provided `layout` can be stored without growing
-    /// the container or a [`LockingError::Poisoned`] error if allocation
-    /// tracker mutex has been poisoned.
-    ///
-    /// This function will block the current thread until internal allocation
-    /// tracked doesn't become available.
-    pub fn can_push_layout(&self, layout: Layout) -> Result<bool, LockingError> {
-        ImplConcurrent::peek_next(&self.inner, layout).map(|it| it.is_some())
-    }
-
-    /// Shrinks the allocated memory to fit the currently stored data and
-    /// returns the new capacity.
-    ///
-    /// This function will block the current thread until internal allocation
-    /// tracked doesn't become available.
-    pub fn shrink_to_fit(&mut self) -> Result<usize, LockingError> {
-        if let Some(shrunk) = ImplConcurrent::shrink_tracker(&mut self.inner)? {
-            self.resize(shrunk).expect("unable to shrink container");
-            Ok(shrunk)
-        } else {
-            Ok(self.get_capacity())
-        }
-    }
-
-    /// Forgets this container without dropping it and returns its base address
-    /// and [`Layout`], or a [`LockingError::Poisoned`] error if base address
-    /// `RwLock` has been poisoned.
-    ///
-    /// For details on safety see _Safety_ section of
-    /// [default implementation](ContiguousMemoryStorage<ImplConcurrent>::forget).
-    pub fn forget(self) -> Result<(*const (), Layout), LockingError> {
-        let base = ImplConcurrent::get_base(&self.base);
-        let layout = self.get_layout();
-        core::mem::forget(self);
-        base.map(|it| (it as *const (), layout))
-    }
-}
-
-impl ContiguousMemoryStorage<ImplUnsafe> {
-    /// Returns the base address of the allocated memory.
-    pub fn get_base(&self) -> *const () {
-        self.base.0 as *const ()
-    }
-
-    /// Returns `true` if the provided value can be stored without growing the
-    /// container.
-    ///
-    /// It's usually clearer to try storing the value directly and then handle
-    /// the case where it wasn't stored through error matching.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use contiguous_mem::UnsafeContiguousMemory;
-    /// # use core::mem::size_of_val;
-    /// let mut storage = UnsafeContiguousMemory::new(0);
-    /// let value = [2, 4, 8, 16];
-    ///
-    /// # assert_eq!(storage.can_push::<Vec<i32>>(), false);
-    /// if !storage.can_push::<Vec<i32>>() {
-    ///     storage.resize(storage.get_capacity() + size_of_val(&value));
-    ///
-    ///     // ...update old pointers...
-    /// }
-    ///
-    /// let stored_value =
-    ///   storage.push(value).expect("unable to store after growing the container");
-    /// ```
-    pub fn can_push<T: StoreRequirements>(&self) -> bool {
-        let layout = Layout::new::<T>();
-        ImplUnsafe::peek_next(&self.inner, layout).is_some()
-    }
-
-    /// Returns `true` if the provided `value` can be stored without growing the
-    /// container.
-    pub fn can_push_value<T: StoreRequirements>(&self, value: &T) -> bool {
-        let layout = Layout::for_value(value);
-        ImplUnsafe::peek_next(&self.inner, layout).is_some()
-    }
-
-    /// Returns `true` if the provided `layout` can be stored without growing
-    /// the container.
-    pub fn can_push_layout(&self, layout: Layout) -> bool {
-        ImplUnsafe::peek_next(&self.inner, layout).is_some()
-    }
-
-    /// Shrinks the allocated memory to fit the currently stored data and
-    /// returns the new capacity.
-    pub fn shrink_to_fit(&mut self) -> usize {
-        if let Some(shrunk) = ImplUnsafe::shrink_tracker(&mut self.inner) {
-            self.resize(shrunk).expect("unable to shrink container");
-            shrunk
-        } else {
-            self.capacity
-        }
-    }
-
-    /// Clones the allocated memory region into a new ContiguousMemoryStorage.
-    ///
-    /// This function isn't unsafe, even though it ignores presence of `Copy`
-    /// bound on stored data, because it doesn't create any pointers.
-    #[must_use]
-    pub fn copy_data(&self) -> Self {
-        let current_layout = self.get_layout();
-        let result = Self::new_for_layout(current_layout);
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                self.get_base(),
-                result.get_base() as *mut (),
-                current_layout.size(),
-            );
-        }
-        result
-    }
-
-    /// Allows freeing a memory range stored at provided `position`.
-    ///
-    /// Type of the position pointer `T` determines the size of the freed chunk.
-    ///
-    /// # Safety
-    ///
-    /// This function is considered unsafe because it can mark a memory range
-    /// as free while a valid reference is pointing to it from another place in
-    /// code.
-    pub unsafe fn free_typed<T>(&mut self, position: *mut T) {
-        Self::free(self, position, size_of::<T>())
-    }
-
-    /// Allows freeing a memory range stored at provided `position` with the
-    /// specified `size`.
-    ///
-    /// # Safety
-    ///
-    /// This function is considered unsafe because it can mark a memory range
-    /// as free while a valid reference is pointing to it from another place in
-    /// code.
-    pub unsafe fn free<T>(&mut self, position: *mut T, size: usize) {
-        let pos: usize = position.sub(self.get_base() as usize) as usize;
-        let base = ImplUnsafe::get_base(&self.base);
-        let tracker = ImplUnsafe::get_allocation_tracker(&mut self.inner);
-        if let Some(freed) = ImplUnsafe::free_region(tracker, base, ByteRange(pos, pos + size)) {
-            core::ptr::drop_in_place(freed as *mut T);
-        }
-    }
-
-    /// Forgets this container without dropping it and returns its base address
-    /// and [`Layout`].
-    ///
-    /// For details on safety see _Safety_ section of
-    /// [default implementation](ContiguousMemoryStorage<ImplConcurrent>::forget).
-    pub fn forget(self) -> (*const (), Layout) {
-        let base = ImplUnsafe::get_base(&self.base);
+        let base = self.inner.base.get();
         let layout = self.get_layout();
         core::mem::forget(self);
         (base as *const (), layout)
@@ -571,34 +437,22 @@ impl ContiguousMemoryStorage<ImplUnsafe> {
 }
 
 #[cfg(feature = "debug")]
-impl<Impl: ImplDetails> core::fmt::Debug for ContiguousMemoryStorage<Impl>
+impl core::fmt::Debug for ContiguousMemory
 where
-    Impl::StorageState: core::fmt::Debug,
+    MemoryState<ImplDefault>: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ContiguousMemoryStorage")
+        f.debug_struct("ContiguousMemory")
             .field("inner", &self.inner)
             .finish()
     }
 }
 
-impl<Impl: ImplDetails> Clone for ContiguousMemoryStorage<Impl> {
-    fn clone(&self) -> Self {
-        ContiguousMemoryStorage {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<Impl: ImplDetails> Deref for ContiguousMemoryStorage<Impl> {
-    type Target = ContiguousMemoryState<Impl>;
-
-    fn deref(&self) -> &Self::Target {
-        Impl::deref_state(&self.inner)
-    }
-}
-
 pub(crate) mod sealed {
+    use core::cell::{Cell, RefCell};
+
+    use crate::tracker::AllocationTracker;
+
     use super::*;
 
     #[derive(Clone, PartialEq, Eq)]
@@ -630,14 +484,14 @@ pub(crate) mod sealed {
     unsafe impl<Impl: ImplDetails> Sync for BaseLocation<Impl> where Impl: PartialEq<ImplConcurrent> {}
 
     #[repr(C)]
-    pub struct ContiguousMemoryState<Impl: StorageDetails = ImplDefault> {
+    pub struct MemoryState<Impl: StorageDetails = ImplDefault> {
         pub(crate) base: BaseLocation<Impl>,
         pub(crate) capacity: Impl::SizeType,
         pub(crate) alignment: usize,
         pub(crate) tracker: Impl::AllocationTracker,
     }
 
-    impl<Impl: StorageDetails> core::fmt::Debug for ContiguousMemoryState<Impl>
+    impl<Impl: StorageDetails> core::fmt::Debug for MemoryState<Impl>
     where
         BaseLocation<Impl>: core::fmt::Debug,
         Impl::SizeType: core::fmt::Debug,
@@ -653,7 +507,7 @@ pub(crate) mod sealed {
         }
     }
 
-    impl<Impl: StorageDetails> ContiguousMemoryState<Impl> {
+    impl<Impl: StorageDetails> MemoryState<Impl> {
         /// Returns the layout of the managed memory.
         pub fn layout(&self) -> Layout {
             unsafe {
@@ -663,7 +517,40 @@ pub(crate) mod sealed {
         }
     }
 
-    impl Clone for ContiguousMemoryState<ImplUnsafe> {
+    impl MemoryState<ImplDefault> {
+        pub fn new(base: *mut u8, capacity: usize, alignment: usize) -> Rc<Self> {
+            Rc::new(MemoryState {
+                base: BaseLocation(Cell::new(base)),
+                capacity: Cell::new(capacity),
+                alignment,
+                tracker: RefCell::new(AllocationTracker::new(capacity)),
+            })
+        }
+    }
+
+    impl MemoryState<ImplConcurrent> {
+        pub fn new_concurrent(base: *mut u8, capacity: usize, alignment: usize) -> Arc<Self> {
+            Arc::new(MemoryState {
+                base: BaseLocation(RwLock::new(base)),
+                capacity: AtomicUsize::new(capacity),
+                alignment,
+                tracker: Mutex::new(AllocationTracker::new(capacity)),
+            })
+        }
+    }
+
+    impl MemoryState<ImplUnsafe> {
+        pub fn new_unsafe(base: *mut u8, capacity: usize, alignment: usize) -> Self {
+            MemoryState {
+                base: BaseLocation(base),
+                capacity,
+                alignment,
+                tracker: AllocationTracker::new(capacity),
+            }
+        }
+    }
+
+    impl Clone for MemoryState<ImplUnsafe> {
         fn clone(&self) -> Self {
             Self {
                 base: self.base,
@@ -674,44 +561,15 @@ pub(crate) mod sealed {
         }
     }
 
-    impl<Impl: StorageDetails> Drop for ContiguousMemoryState<Impl> {
+    impl<Impl: StorageDetails> Drop for MemoryState<Impl> {
         fn drop(&mut self) {
             let layout = self.layout();
             Impl::deallocate(&mut self.base.0, layout)
         }
     }
 }
-use sealed::*;
-
-/// Alias for `ContiguousMemoryStorage` that uses
-/// [concurrent implementation](ImplConcurrent).
-///
-/// # Example
-///
-/// ```rust
-#[doc = include_str!("../examples/sync_impl.rs")]
-/// ```
-pub type SyncContiguousMemory = ContiguousMemoryStorage<ImplConcurrent>;
-
-/// Alias for `ContiguousMemoryStorage` that uses
-/// [default implementation](ImplDefault).
-///
-/// # Example
-///
-/// ```rust
-#[doc = include_str!("../examples/default_impl.rs")]
-/// ```
-pub type ContiguousMemory = ContiguousMemoryStorage<ImplDefault>;
-
-/// Alias for `ContiguousMemoryStorage` that uses
-/// [unsafe implementation](ImplUnsafe).
-///
-/// # Example
-///
-/// ```rust
-#[doc = include_str!("../examples/unsafe_impl.rs")]
-/// ```
-pub type UnsafeContiguousMemory = ContiguousMemoryStorage<ImplUnsafe>;
+use crate::refs::sealed::{BorrowState, ReferenceState};
+pub(crate) use sealed::*;
 
 #[cfg(all(test, not(feature = "no_std")))]
 mod test {
@@ -838,6 +696,8 @@ mod test {
             // expecting 12, but due to alignment we're skipping two u16 slots
             // and then double the size as remaining (aligned) 4 bytes aren't
             // enough for u64
+
+            // FIXME: This should fail now
             assert_eq!(memory.get_capacity(), 24);
         }
     }

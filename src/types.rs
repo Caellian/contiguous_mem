@@ -9,6 +9,9 @@ mod std_imports {
     pub use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
     pub use std::alloc as allocator;
+
+    #[cfg(feature = "sync")]
+    pub use std::sync::atomic::{AtomicUsize, Ordering};
 }
 
 #[cfg(not(feature = "no_std"))]
@@ -27,6 +30,9 @@ mod nostd_imports {
 
     pub use ::alloc::rc::Rc;
     pub use ::alloc::sync::Arc;
+
+    #[cfg(feature = "sync")]
+    pub use portable_atomic::{AtomicUsize, Ordering};
 }
 #[cfg(feature = "no_std")]
 pub use nostd_imports::*;
@@ -164,10 +170,6 @@ impl<T: ?Sized> RefSizeReq for T {}
 pub trait RefSizeReq: Sized {}
 #[cfg(not(feature = "ptr_metadata"))]
 impl<T: Sized> RefSizeReq for T {}
-
-/// Type requirements for values that can be stored.
-pub trait StoreRequirements: 'static {}
-impl<T: 'static> StoreRequirements for T {}
 
 #[cfg(feature = "ptr_metadata")]
 pub use core::marker::Unsize;
