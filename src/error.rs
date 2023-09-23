@@ -20,6 +20,7 @@ use crate::range::ByteRange;
 /// Error returned when a [`Mutex`](crate::types::Mutex) or a
 /// [`RwLock`](crate::types::RwLock) isn't lockable.
 #[derive(Debug)]
+#[cfg(feature = "sync")]
 pub enum LockingError {
     /// Not lockable because the mutex/lock was poisoned.
     Poisoned {
@@ -34,6 +35,7 @@ pub enum LockingError {
 }
 
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+#[cfg(feature = "sync")]
 impl Display for LockingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -63,6 +65,7 @@ impl Display for LockingError {
 }
 
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+#[cfg(feature = "sync")]
 impl Error for LockingError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
@@ -70,6 +73,7 @@ impl Error for LockingError {
 }
 
 #[cfg(not(feature = "no_std"))]
+#[cfg(feature = "sync")]
 impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
     fn from(_: PoisonError<MutexGuard<'_, *mut u8>>) -> Self {
         LockingError::Poisoned {
@@ -79,6 +83,7 @@ impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
 }
 
 #[cfg(not(feature = "no_std"))]
+#[cfg(feature = "sync")]
 impl From<PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>> for LockingError {
     fn from(_: PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>) -> Self {
         LockingError::Poisoned {
@@ -114,7 +119,7 @@ impl Error for RegionBorrowedError {
 }
 
 /// Represents errors that can occur while using the
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage) container.
+/// [`ContiguousMemory`](crate::ContiguousMemory) container.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ContiguousMemoryError {
@@ -124,22 +129,22 @@ pub enum ContiguousMemoryError {
     /// Attempted to occupy a memory region that is already marked as taken.
     AlreadyUsed,
     /// Attempted to operate on a memory region that is not contained within the
-    /// [`AllocationTracker`](crate::tracker::AllocationTracker).
+    /// allocation tracker.
     NotContained,
     /// Attempted to free memory that has already been deallocated.
     DoubleFree,
-    /// The [`AllocationTracker`](crate::tracker::AllocationTracker) does not
-    /// allow shrinking to the expected size.
+    /// The allocation tracker does not allow shrinking to the expected size due
+    /// to previously stored data.
     Unshrinkable {
         /// The minimum required size to house currently stored data.
         required_size: usize,
     },
     /// Indicates that a mutex wasn't lockable.
+    #[cfg(feature = "sync")]
     Lock(LockingError),
     /// Indicates that the provided [`Layout`](core::alloc::Layout) is invalid.
     Layout(
-        /// The underlying error that caused the [`Layout`](core::alloc::Layout)
-        /// to be considered invalid.
+        /// The underlying error returned by `Layout` constructor.
         LayoutError,
     ),
     /// Tried mutably borrowing already borrowed region of memory
@@ -149,13 +154,13 @@ pub enum ContiguousMemoryError {
 /// Represents possible poisoning sources for mutexes and locks.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
+#[cfg(feature = "sync")]
 pub enum LockSource {
     /// Mutex containing the base memory offset was poisoned.
     BaseAddress,
-    /// `AllocationTracker` mutex was poisoned.
+    /// Allocation tracker mutex was poisoned.
     AllocationTracker,
-    /// Concurrent mutable access exclusion flag in `ReferenceState` was
-    /// poisoned.
+    /// Concurrent mutable access exclusion flag in reference state was poisoned.
     Reference,
 }
 
@@ -184,6 +189,7 @@ impl Display for ContiguousMemoryError {
                 "Cannot shrink memory regions; minimum required space: {} bytes",
                 min_required
             ),
+            #[cfg(feature = "sync")]
             ContiguousMemoryError::Lock(it) => write!(f, "Poison error: {}", it),
             ContiguousMemoryError::Layout(it) => write!(f, "Layout error: {}", it),
             ContiguousMemoryError::BorrowMut(it) => write!(f, "Borrow mutable error: {}", it),
@@ -196,12 +202,14 @@ impl Error for ContiguousMemoryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             ContiguousMemoryError::Layout(it) => Some(it),
+            #[cfg(feature = "sync")]
             ContiguousMemoryError::Lock(it) => Some(it),
             _ => None,
         }
     }
 }
 
+#[cfg(feature = "sync")]
 impl From<LockingError> for ContiguousMemoryError {
     fn from(layout_err: LockingError) -> Self {
         ContiguousMemoryError::Lock(layout_err)

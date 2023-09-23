@@ -242,7 +242,7 @@ impl AllocationTracker {
             if found.contains(region) {
                 return Err(ContiguousMemoryError::DoubleFree);
             }
-            found.merge_in_unchecked(region);
+            found.apply_union_unchecked(region);
         } else if let Some((i, _)) = self.unused.iter().enumerate().find(|it| it.0 > region.0) {
             self.unused.insert(i, region);
         } else {

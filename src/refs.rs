@@ -1,6 +1,6 @@
 //! Returned reference types and read/write guards.
 //!
-//! See [`ContiguousMemoryStorage::push`](crate::ContiguousMemoryStorage::push)
+//! See [`ContiguousMemoryStorage::push`](crate::ContiguousMemory::push)
 //! for information on implementation specific return values.
 
 use core::{
@@ -8,15 +8,21 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
+#[cfg(feature = "sync")]
+use crate::common::ImplConcurrent;
+#[cfg(feature = "sync")]
+use crate::error::{LockSource, LockingError};
+
 use crate::{
-    common::{ImplConcurrent, ImplDefault, ImplDetails, StorageDetails},
-    error::{LockSource, LockingError, RegionBorrowedError},
+    common::{ImplDefault, ImplDetails, StorageDetails},
+    error::RegionBorrowedError,
     range::ByteRange,
     types::*,
 };
 
 /// A synchronized (thread-safe) reference to `T` data stored in a
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage) structure.
+/// [`ContiguousMemoryStorage`](crate::ContiguousMemory) structure.
+#[cfg(feature = "sync")]
 pub struct SyncContiguousEntryRef<T: ?Sized> {
     pub(crate) inner: Arc<ReferenceState<T, ImplConcurrent>>,
     #[cfg(feature = "ptr_metadata")]
@@ -26,8 +32,10 @@ pub struct SyncContiguousEntryRef<T: ?Sized> {
 }
 
 /// A shorter type name for [`SyncContiguousEntryRef`].
+#[cfg(feature = "sync")]
 pub type SCERef<T> = SyncContiguousEntryRef<T>;
 
+#[cfg(feature = "sync")]
 impl<T: ?Sized> SyncContiguousEntryRef<T> {
     /// Returns a byte range within container memory this reference points to.
     pub fn range(&self) -> ByteRange {
@@ -35,8 +43,8 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     }
 
     /// Returns a reference to data at its current location or returns a
-    /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
-    /// if the Mutex holding the `base` address pointer has been poisoned.
+    /// [`LockingError::Poisoned`] error if the Mutex holding the `base` address
+    /// pointer has been poisoned.
     ///
     /// If the data is mutably accessed, this method will block the current
     /// thread until it becomes available.
@@ -62,12 +70,11 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     }
 
     /// Returns a reference to data at its current location or returns a
-    /// [`LockingError::Poisoned`](crate::error::LockingError::Poisoned) error
-    /// if the Mutex holding the `base` address pointer has been poisoned.
+    /// [`LockingError::Poisoned`] error if the Mutex holding the `base` address
+    /// pointer has been poisoned.
     ///
     /// If the data is mutably accessed, this method returns a
-    /// [`LockingError::WouldBlock`](crate::error::LockingError::WouldBlock)
-    /// error.
+    /// [`LockingError::WouldBlock`] error.
     pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplConcurrent>, LockingError>
     where
         T: RefSizeReq,
@@ -285,8 +292,10 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     }
 }
 
+#[cfg(feature = "sync")]
 impl<T: ?Sized> EntryRef for SyncContiguousEntryRef<T> {}
 
+#[cfg(feature = "sync")]
 impl<T: ?Sized> Clone for SyncContiguousEntryRef<T> {
     fn clone(&self) -> Self {
         SyncContiguousEntryRef {
@@ -309,7 +318,7 @@ impl<T: ?Sized> core::fmt::Debug for SyncContiguousEntryRef<T> {
 }
 
 /// A thread-unsafe reference to `T` data stored in
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage) structure.
+/// [`ContiguousMemoryStorage`](crate::ContiguousMemory) structure.
 pub struct ContiguousEntryRef<T: ?Sized> {
     pub(crate) inner: Rc<ReferenceState<T, ImplDefault>>,
     #[cfg(feature = "ptr_metadata")]
@@ -358,6 +367,7 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
 
             Ok(MemoryReadGuard {
                 state: self.inner.clone(),
+                #[cfg(feature = "sync")]
                 guard: (),
                 #[cfg(not(feature = "ptr_metadata"))]
                 value: &*(pos as *mut T),
@@ -399,6 +409,7 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
 
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
+                #[cfg(feature = "sync")]
                 guard: (),
                 #[cfg(not(feature = "ptr_metadata"))]
                 value: &mut *(pos as *mut T),
@@ -475,7 +486,7 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
     /// which means that a subsequent call to [`ContiguousMemoryStorage::push`]
     /// or friends can cause undefined behavior when dereferencing the pointer.
     ///
-    /// [`ContiguousMemoryStorage::push`]: crate::ContiguousMemoryStorage::push
+    /// [`ContiguousMemoryStorage::push`]: crate::ContiguousMemory::push
     pub unsafe fn as_ptr(&self) -> *const T
     where
         T: RefSizeReq,
@@ -626,6 +637,7 @@ use sealed::*;
 pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails> {
     state: Impl::RefState<T>,
     #[allow(unused)]
+    #[cfg(feature = "sync")]
     guard: Impl::WriteGuard<'a>,
     value: &'a mut T,
 }
@@ -656,6 +668,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails> Drop for MemoryWriteGuard<'a, T, Impl> {
 pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails> {
     state: Impl::RefState<T>,
     #[allow(unused)]
+    #[cfg(feature = "sync")]
     guard: Impl::ReadGuard<'a>,
     value: &'a T,
 }

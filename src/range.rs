@@ -1,10 +1,8 @@
-#![doc(hidden)]
+//! Contains [`ByteRange`] and related code.
 
 use core::fmt::Display;
 
-/// Represents a range of bytes in
-/// [`AllocationTracker`](crate::tracker::AllocationTracker) and
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage).
+/// Represents a range of bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteRange(
     /// **Inclusive** lower bound of this byte range.
@@ -87,13 +85,13 @@ impl ByteRange {
 
     /// Merges this byte range with `other` and returns a byte range that
     /// contains both.
-    pub fn merge_unchecked(&self, other: Self) -> Self {
+    pub fn union_unchecked(&self, other: Self) -> Self {
         ByteRange(self.0.min(other.0), self.1.max(other.1))
     }
 
     /// Merges another `other` byte range into this one, resulting in a byte
     /// range that contains both.
-    pub fn merge_in_unchecked(&mut self, other: Self) {
+    pub fn apply_union_unchecked(&mut self, other: Self) {
         self.0 = self.0.min(other.0);
         self.1 = self.1.max(other.1);
     }
@@ -114,11 +112,11 @@ mod test {
         let a = ByteRange::new_unchecked(0, 10);
         let b = ByteRange::new_unchecked(10, 20);
 
-        let added_seq = a.merge_unchecked(b);
+        let added_seq = a.union_unchecked(b);
         assert_eq!(added_seq.0, 0);
         assert_eq!(added_seq.1, 20);
 
-        let added_seq_rev = b.merge_unchecked(a);
+        let added_seq_rev = b.union_unchecked(a);
         assert_eq!(added_seq_rev.0, 0);
         assert_eq!(added_seq_rev.1, 20);
     }

@@ -1,7 +1,7 @@
 # contiguous_mem
 
 contiguous_mem streamlines storage and management of data stored in contiguous
-blocks of memory.
+block of memory.
 
 [![Crate](https://img.shields.io/crates/v/contiguous_mem?style=for-the-badge&logo=docs.rs)](https://crates.io/crates/contiguous_mem)
 [![Documentation](https://img.shields.io/docsrs/contiguous-mem?style=for-the-badge&logo=rust)](https://docs.rs/contiguous-mem)
@@ -17,12 +17,17 @@ blocks of memory.
 
 ### Specialized implementations
 
-You can pick and choose which implementation suits your use case best allowing
-you to avoid runtime cost of synchronization and additionally memory cost of
-safely wrapping referenced data if you don't need it.
+This crate provides alternative implementations for:
 
-Default implementation keeps relative offsets of stored data which are resolved
-on access.
+- thread-safe code: `SyncContiguousMemory`
+- low level, unsafe code: `UnsafeContiguousMemory`
+
+Default implementation (`ContiguousMemory`) and `SyncContiguousMemory` return
+smart references with relative offsets of stored data, while the
+`UnsafeContiguousMemory` returns raw pointers.
+
+All implementations use a similar interface which makes it convenient to switch
+over when your scope and requirements shift.
 
 ## Use cases
 
@@ -56,6 +61,9 @@ contiguous_mem = { version = "0.4", features = ["no_std"] }
 - [`error_in_core`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/error-in-core.html)
   &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std`
   environment
+- `sync` (default) - enables `SyncContiguousMemory` and related error code
+  implementation
+- `unsafe` (default) - enables `UnsafeContiguousMemory`
 
 ### Usage
 

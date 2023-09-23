@@ -17,12 +17,17 @@ use core::{
 use crate::types::*;
 
 use crate::{
-    error::{ContiguousMemoryError, LockSource, LockingError},
+    error::ContiguousMemoryError,
     range::ByteRange,
-    refs::{sealed::*, ContiguousEntryRef, SyncContiguousEntryRef},
+    refs::{sealed::*, ContiguousEntryRef},
     tracker::AllocationTracker,
     MemoryState,
 };
+
+#[cfg(feature = "sync")]
+use crate::error::{LockSource, LockingError};
+#[cfg(feature = "sync")]
+use crate::SyncContiguousEntryRef;
 
 /// Implementation details shared between [storage](StorageDetails) and
 /// [`reference`](ReferenceDetails) implementations.
@@ -345,7 +350,7 @@ impl ReferenceDetails for ImplUnsafe {
 }
 
 /// Trait representing requirements for implementation details of the
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage).
+/// [`ContiguousMemoryStorage`](crate::ContiguousMemory).
 ///
 /// This trait is implemented by:
 /// - [`ImplDefault`]

@@ -3,18 +3,20 @@ use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop};
 
 use crate::error::{ContiguousMemoryError, LockSource, LockingError};
+use crate::range::ByteRange;
 use crate::refs::sealed::ReferenceState;
 pub use crate::refs::SyncContiguousEntryRef;
 use crate::sealed::MemoryState;
 use crate::types::*;
-use crate::{ByteRange, ImplConcurrent};
+use crate::ImplConcurrent;
 
 /// A collection that can store different data types in a contigous block of
 /// memory.
 ///
 /// Note that copying this structure creates a copy which represents the same
-/// internal state. If you need to copy the memory region into a new container
-/// see: [`SyncContiguousMemory::copy_data`]
+/// internal state.
+/// If you need to copy the memory region into a new container use:
+/// [`SyncContiguousMemory::copy_data`]
 ///
 /// # Example
 ///
@@ -323,7 +325,7 @@ impl SyncContiguousMemory {
     }
 
     /// Stores a `value` of type `T` in the contiguous memory block and returns
-    /// a [`SyncContiguousEntryRef<T>`](refs::SyncContiguousEntryRef) pointing
+    /// a [`SyncContiguousEntryRef<T>`](SyncContiguousEntryRef) pointing
     /// to it.
     ///
     /// Value type argument `T` is used to deduce type size and returned
@@ -455,7 +457,7 @@ impl SyncContiguousMemory {
         })
     }
 
-    /// Variant of [`push_raw`](ContiguousMemory::push_raw) which returns a
+    /// Variant of [`push_raw`](SyncContiguousMemory::push_raw) which returns a
     /// reference that never marks the used memory segment as free when
     /// dropped.
     pub unsafe fn push_raw_persisted<T>(
@@ -520,12 +522,36 @@ impl SyncContiguousMemory {
         })
     }
 
+    /// Clones the allocated memory region into a new SyncMemoryStorage.
+    ///
+    /// This function isn't unsafe, even though it ignores presence of `Copy`
+    /// bound on stored data, because it doesn't create any invalid references.
+    #[must_use]
+    pub fn copy_data(&self) -> Result<Self, LockingError> {
+        let base = self.inner.base.read_named(LockSource::BaseAddress)?;
+        let current_layout = self.get_layout();
+        let result = Self::new_for_layout(current_layout);
+        let result_base = result.get_base()?;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                *base as *const (),
+                result_base as *mut (),
+                current_layout.size(),
+            );
+        }
+        Ok(result)
+    }
+
     /// Marks the entire contents of the container as free, allowing new data
     /// to be stored in place of previously stored data.
     ///
     /// This allows clearing persisted entries created with
-    /// [`ContiguousMemory::push_persisted`] and
-    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    /// [`SyncContiguousMemory::push_persisted`] and
+    /// [`SyncContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// See also:
+    /// - [`SyncContiguousMemory::clear_region`] - for freeing a specific
+    ///   container region
     ///
     /// # Errors
     ///
@@ -550,8 +576,11 @@ impl SyncContiguousMemory {
     /// to be stored in place of previously stored data.
     ///
     /// This allows clearing persisted entries created with
-    /// [`ContiguousMemory::push_persisted`] and
-    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    /// [`SyncContiguousMemory::push_persisted`] and
+    /// [`SyncContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// See also:
+    /// - [`SyncContiguousMemory::clear`] - for freeing the entire container
     ///
     /// # Errors
     ///
@@ -568,10 +597,7 @@ impl SyncContiguousMemory {
     /// returned references overlapping `region`. Storing data into the
     /// container and then trying to access previously stored data from
     /// overlapping regions will cause undefined behavior.
-    pub unsafe fn clear_region(
-        &mut self,
-        region: ByteRange,
-    ) -> Result<(), ContiguousMemoryError> {
+    pub unsafe fn clear_region(&mut self, region: ByteRange) -> Result<(), ContiguousMemoryError> {
         self.inner
             .tracker
             .lock_named(LockSource::AllocationTracker)?
@@ -583,7 +609,7 @@ impl SyncContiguousMemory {
     /// `RwLock` has been poisoned.
     ///
     /// For details on safety see _Safety_ section of
-    /// [default implementation](ContiguousMemoryStorage<ImplDefault>::forget).
+    /// [default implementation](crate::ContiguousMemory::forget).
     pub fn forget(self) -> Result<(*const (), Layout), LockingError> {
         let base = self.get_base()?;
         let layout = self.get_layout();

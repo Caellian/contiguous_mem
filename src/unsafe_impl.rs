@@ -2,9 +2,9 @@ use core::alloc::{Layout, LayoutError};
 use core::mem::{size_of, ManuallyDrop};
 
 use crate::error::ContiguousMemoryError;
+use crate::range::ByteRange;
 use crate::sealed::{BaseLocation, MemoryState};
 use crate::types::*;
-use crate::ByteRange;
 
 /// A memory container for efficient allocation and storage of contiguous data.
 ///
@@ -15,10 +15,10 @@ use crate::ByteRange;
 /// Type argument `Impl` specifies implementation details for the behavior of
 /// this struct.
 ///
-/// Note that this structure is a smart abstraction over underlying data,
-/// copying it creates a copy which represents the same internal state. If you
-/// need to copy the memory region into a new container see:
-/// [`ContiguousMemoryStorage::copy_data`]
+/// Note that copying this structure creates a copy which represents the same
+/// internal state.
+/// If you need to copy the memory region into a new container use:
+/// [`UnsafeContiguousMemory::copy_data`]
 ///
 /// # Example
 ///
@@ -239,9 +239,10 @@ impl UnsafeContiguousMemory {
     /// indicating that the container couldn't store the provided data with
     /// current size.
     ///
-    /// Memory block can still be grown by calling [`ContiguousMemory::resize`],
-    /// but it can't be done automatically as that would invalidate all the
-    /// existing pointers without any indication.
+    /// Memory block can still be grown by calling
+    /// [`UnsafeContiguousMemory::resize`], but it can't be done automatically
+    /// as that would invalidate all the existing pointers without any
+    /// indication.
     pub fn push<T>(&mut self, value: T) -> Result<*mut T, ContiguousMemoryError> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
@@ -250,8 +251,8 @@ impl UnsafeContiguousMemory {
         unsafe { self.push_raw(pos, layout) }
     }
 
-    /// Works same as [`push`](ContiguousMemory::push) but takes a pointer and
-    /// layout.
+    /// Works same as [`push`](UnsafeContiguousMemory::push) but takes a pointer
+    /// and layout.
     ///
     /// Pointer type is used to deduce the destruction behavior for
     /// implementations that return a reference, but can be disabled by casting
@@ -331,7 +332,7 @@ impl UnsafeContiguousMemory {
         unsafe { self.inner.base.add(position) as *mut T }
     }
 
-    /// Clones the allocated memory region into a new ContiguousMemoryStorage.
+    /// Clones the allocated memory region into a new UnsafeContiguousMemory.
     ///
     /// This function isn't unsafe, even though it ignores presence of `Copy`
     /// bound on stored data, because it doesn't create any pointers.
@@ -349,21 +350,14 @@ impl UnsafeContiguousMemory {
         result
     }
 
-    /// Allows freeing a memory range stored at provided `position`.
-    ///
-    /// Type of the position pointer `T` determines the size of the freed chunk.
-    ///
-    /// # Safety
-    ///
-    /// This function is considered unsafe because it can mark a memory range
-    /// as free while a valid reference is pointing to it from another place in
-    /// code.
-    pub unsafe fn free_typed<T>(&mut self, position: *mut T) {
-        Self::free(self, position, size_of::<T>())
-    }
-
     /// Allows freeing a memory range stored at provided `position` with the
     /// specified `size`.
+    ///
+    /// See also:
+    /// - [`UnsafeContiguousMemory::free_typed`] - variant bound to type size
+    /// - [`UnsafeContiguousMemory::clear`] - for freeing entire container
+    /// - [`UnsafeContiguousMemory::clear_region`] - for freeing a container
+    ///   region
     ///
     /// # Safety
     ///
@@ -377,29 +371,52 @@ impl UnsafeContiguousMemory {
         }
     }
 
-    /// Marks the entire contents of the container as free, allowing new data
-    /// to be stored in place of previously stored data.
+    /// Allows freeing a memory region dedicated to pointed-to type `T` stored
+    /// at provided `position`.
     ///
-    /// This allows clearing persisted entries created with
-    /// [`ContiguousMemory::push_persisted`] and
-    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    /// Type `T` determines the size of the freed memory region.
+    ///
+    /// See also:
+    /// - [`UnsafeContiguousMemory::free`] - variant not bound to type size
+    /// - [`UnsafeContiguousMemory::clear`] - for freeing entire container
+    /// - [`UnsafeContiguousMemory::clear_region`] - for freeing a container
+    ///   region
     ///
     /// # Safety
     ///
-    /// This method is unsafe because it doesn't invalidate any previously
-    /// returned references. Storing data into the container and then trying to
-    /// access previously stored data from any existing references will cause
-    /// undefined behavior.
-    pub unsafe fn clear(&mut self) {
+    /// This function is considered unsafe because it can mark a memory range
+    /// as free while a valid reference is pointing to it from another place in
+    /// code.
+    pub unsafe fn free_typed<T>(&mut self, position: *mut T) {
+        Self::free(self, position, size_of::<T>())
+    }
+
+    /// Marks the entire contents of the container as free, allowing new data
+    /// to be stored in place of previously stored data.
+    ///
+    /// This function isn't unsafe because responsibility for validity of
+    /// underlying data must be ensured when pointers are dereferenced.
+    ///
+    /// See also:
+    /// - [`UnsafeContiguousMemory::free`] - for freeing using a pointed-to
+    ///   address
+    /// - [`UnsafeContiguousMemory::free_typed`] - for freeing using absolute
+    ///   address and pointed-to type size
+    /// - [`UnsafeContiguousMemory::clear_region`] - for freeing a specific
+    ///   container region
+    pub fn clear(&mut self) {
         self.inner.tracker.clear();
     }
 
     /// Marks the provided `region` of the container as free, allowing new data
     /// to be stored in place of previously stored data.
     ///
-    /// This allows clearing persisted entries created with
-    /// [`ContiguousMemory::push_persisted`] and
-    /// [`ContiguousMemory::push_raw_persisted`] methods.
+    /// See also:
+    /// - [`UnsafeContiguousMemory::free`] - for freeing using a pointed-to
+    ///   address
+    /// - [`UnsafeContiguousMemory::free_typed`] - for freeing using absolute
+    ///   address and pointed-to type size
+    /// - [`UnsafeContiguousMemory::clear`] - for freeing the entire container
     ///
     /// # Errors
     ///
@@ -413,10 +430,7 @@ impl UnsafeContiguousMemory {
     /// returned references overlapping `region`. Storing data into the
     /// container and then trying to access previously stored data from
     /// overlapping regions will cause undefined behavior.
-    pub unsafe fn clear_region(
-        &mut self,
-        region: ByteRange,
-    ) -> Result<(), ContiguousMemoryError> {
+    pub unsafe fn clear_region(&mut self, region: ByteRange) -> Result<(), ContiguousMemoryError> {
         self.inner.tracker.release(region)
     }
 
@@ -424,7 +438,7 @@ impl UnsafeContiguousMemory {
     /// and [`Layout`].
     ///
     /// For details on safety see _Safety_ section of
-    /// [default implementation](ContiguousMemoryStorage<ImplDefault>::forget).
+    /// [default implementation](crate::ContiguousMemory::forget).
     pub fn forget(self) -> (*const (), Layout) {
         let base = self.inner.base.0;
         let layout = self.get_layout();

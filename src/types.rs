@@ -34,6 +34,7 @@ mod nostd_imports {
 #[cfg(feature = "no_std")]
 pub use nostd_imports::*;
 
+#[cfg(feature = "sync")]
 use crate::error::{LockSource, LockingError};
 
 /// Trait that adds a method which mimics std `Result::map_err` on a Lock in

@@ -26,13 +26,12 @@ mod unsafe_impl;
 #[cfg(feature = "unsafe")]
 pub use unsafe_impl::UnsafeContiguousMemory;
 
-use common::*;
-use common::{ImplConcurrent, ImplDefault, ImplUnsafe};
-pub use range::ByteRange;
-pub use refs::{CERef, ContiguousEntryRef, SCERef, SyncContiguousEntryRef};
+// Re-exports
+pub use refs::{CERef, ContiguousEntryRef};
+#[cfg(feature = "sync")]
+pub use refs::{SCERef, SyncContiguousEntryRef};
 #[cfg(feature = "ptr_metadata")]
 pub use types::static_metadata;
-use types::*;
 
 use core::cell::Cell;
 use core::marker::PhantomData;
@@ -42,7 +41,10 @@ use core::{
     ops::Deref,
 };
 
+use common::*;
 use error::ContiguousMemoryError;
+use range::ByteRange;
+use types::*;
 
 /// A memory container for efficient allocation and storage of contiguous data.
 ///
@@ -414,12 +416,34 @@ impl ContiguousMemory {
         }
     }
 
+    /// Clones the allocated memory region into a new MemoryStorage.
+    ///
+    /// This function isn't unsafe, even though it ignores presence of `Copy`
+    /// bound on stored data, because it doesn't create any invalid references.
+    #[must_use]
+    pub fn copy_data(&self) -> Self {
+        let current_layout = self.get_layout();
+        let result = Self::new_for_layout(current_layout);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self.get_base(),
+                result.get_base() as *mut (),
+                current_layout.size(),
+            );
+        }
+        result
+    }
+
     /// Marks the entire contents of the container as free, allowing new data
     /// to be stored in place of previously stored data.
     ///
     /// This allows clearing persisted entries created with
     /// [`ContiguousMemory::push_persisted`] and
     /// [`ContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// See also:
+    /// - [`ContiguousMemory::clear_region`] - for freeing a specific
+    ///   container region
     ///
     /// # Safety
     ///
@@ -437,6 +461,9 @@ impl ContiguousMemory {
     /// This allows clearing persisted entries created with
     /// [`ContiguousMemory::push_persisted`] and
     /// [`ContiguousMemory::push_raw_persisted`] methods.
+    ///
+    /// See also:
+    /// - [`ContiguousMemory::clear`] - for freeing the entire container
     ///
     /// # Errors
     ///
@@ -523,8 +550,11 @@ pub(crate) mod sealed {
         }
     }
 
+    #[cfg(feature = "unsafe")]
     impl Copy for BaseLocation<ImplUnsafe> {}
+    #[cfg(feature = "sync")]
     unsafe impl<Impl: ImplDetails> Send for BaseLocation<Impl> where Impl: PartialEq<ImplConcurrent> {}
+    #[cfg(feature = "sync")]
     unsafe impl<Impl: ImplDetails> Sync for BaseLocation<Impl> where Impl: PartialEq<ImplConcurrent> {}
 
     #[repr(C)]
@@ -572,6 +602,7 @@ pub(crate) mod sealed {
         }
     }
 
+    #[cfg(feature = "sync")]
     impl MemoryState<ImplConcurrent> {
         pub fn new_concurrent(base: *mut u8, capacity: usize, alignment: usize) -> Arc<Self> {
             Arc::new(MemoryState {
@@ -583,6 +614,7 @@ pub(crate) mod sealed {
         }
     }
 
+    #[cfg(feature = "unsafe")]
     impl MemoryState<ImplUnsafe> {
         pub fn new_unsafe(base: *mut u8, capacity: usize, alignment: usize) -> Self {
             MemoryState {
@@ -594,6 +626,7 @@ pub(crate) mod sealed {
         }
     }
 
+    #[cfg(feature = "unsafe")]
     impl Clone for MemoryState<ImplUnsafe> {
         fn clone(&self) -> Self {
             Self {
