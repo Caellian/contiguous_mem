@@ -7,7 +7,7 @@ struct Data {
 
 fn main() {
     // Create a ContiguousMemory instance with a capacity of 1024 bytes and 1-byte alignment
-    let mut memory = UnsafeContiguousMemory::new(1024);
+    let mut memory = UnsafeContiguousMemory::new_with_capacity(1024);
 
     // Store data in the memory container
     let data = Data { value: 42 };

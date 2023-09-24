@@ -11,20 +11,21 @@ use core::{
 #[cfg(feature = "sync")]
 use crate::common::ImplConcurrent;
 #[cfg(feature = "sync")]
-use crate::error::{LockSource, LockingError};
+use crate::error::{LockTarget, LockingError};
 
 use crate::{
     common::{ImplDefault, ImplDetails, StorageDetails},
     error::RegionBorrowedError,
     range::ByteRange,
+    raw::MemoryManager,
     types::*,
 };
 
 /// A synchronized (thread-safe) reference to `T` data stored in a
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemory) structure.
 #[cfg(feature = "sync")]
-pub struct SyncContiguousEntryRef<T: ?Sized> {
-    pub(crate) inner: Arc<ReferenceState<T, ImplConcurrent>>,
+pub struct SyncContiguousEntryRef<T: ?Sized, A: MemoryManager> {
+    pub(crate) inner: Arc<ReferenceState<T, ImplConcurrent, A>>,
     #[cfg(feature = "ptr_metadata")]
     pub(crate) metadata: <T as Pointee>::Metadata,
     #[cfg(not(feature = "ptr_metadata"))]
@@ -33,10 +34,10 @@ pub struct SyncContiguousEntryRef<T: ?Sized> {
 
 /// A shorter type name for [`SyncContiguousEntryRef`].
 #[cfg(feature = "sync")]
-pub type SCERef<T> = SyncContiguousEntryRef<T>;
+pub type SCERef<T, A> = SyncContiguousEntryRef<T, A>;
 
 #[cfg(feature = "sync")]
-impl<T: ?Sized> SyncContiguousEntryRef<T> {
+impl<T: ?Sized, A: MemoryManager> SyncContiguousEntryRef<T, A> {
     /// Returns a byte range within container memory this reference points to.
     pub fn range(&self) -> ByteRange {
         self.inner.range
@@ -48,15 +49,15 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     ///
     /// If the data is mutably accessed, this method will block the current
     /// thread until it becomes available.
-    pub fn get(&self) -> Result<MemoryReadGuard<'_, T, ImplConcurrent>, LockingError>
+    pub fn get(&self) -> Result<MemoryReadGuard<'_, T, ImplConcurrent, A>, LockingError>
     where
         T: RefSizeReq,
     {
-        let guard = self.inner.borrow_kind.read_named(LockSource::Reference)?;
+        let guard = self.inner.borrow_kind.read_named(LockTarget::Reference)?;
 
         unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state.base)?;
-            let pos = base.add(self.inner.range.0);
+            let base = <ImplConcurrent as StorageDetails<A>>::get_base(&self.inner.state.base)?;
+            let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryReadGuard {
                 state: self.inner.clone(),
@@ -75,18 +76,18 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     ///
     /// If the data is mutably accessed, this method returns a
     /// [`LockingError::WouldBlock`] error.
-    pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplConcurrent>, LockingError>
+    pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplConcurrent, A>, LockingError>
     where
         T: RefSizeReq,
     {
         let guard = self
             .inner
             .borrow_kind
-            .try_read_named(LockSource::Reference)?;
+            .try_read_named(LockTarget::Reference)?;
 
         unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state.base)?;
-            let pos = base.add(self.inner.range.0);
+            let base = <ImplConcurrent as StorageDetails<A>>::get_base(&self.inner.state.base)?;
+            let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryReadGuard {
                 state: self.inner.clone(),
@@ -103,14 +104,15 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     /// [`LockingError::Poisoned`] error if the Mutex holding the base address
     /// pointer or the Mutex holding concurrent mutable access flag has been
     /// poisoned.
-    pub fn get_mut(&mut self) -> Result<MemoryWriteGuard<'_, T, ImplConcurrent>, LockingError>
+    pub fn get_mut(&mut self) -> Result<MemoryWriteGuard<'_, T, ImplConcurrent, A>, LockingError>
     where
         T: RefSizeReq,
     {
-        let guard = self.inner.borrow_kind.write_named(LockSource::Reference)?;
+        let guard = self.inner.borrow_kind.write_named(LockTarget::Reference)?;
         unsafe {
-            let base = ImplConcurrent::get_base(&self.inner.state.base)?;
-            let pos = base.add(self.inner.range.0);
+            let base = <ImplConcurrent as StorageDetails<A>>::get_base(&self.inner.state.base)?;
+            let pos = self.inner.range.offset_base_unwrap(base);
+
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
                 guard,
@@ -135,17 +137,20 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     ///
     /// - [`LockingError::WouldBlock`] error if accessing referenced data chunk
     ///   would be blocking.
-    pub fn try_get_mut(&mut self) -> Result<MemoryWriteGuard<'_, T, ImplConcurrent>, LockingError>
+    pub fn try_get_mut(
+        &mut self,
+    ) -> Result<MemoryWriteGuard<'_, T, ImplConcurrent, A>, LockingError>
     where
         T: RefSizeReq,
     {
         let guard = self
             .inner
             .borrow_kind
-            .try_write_named(LockSource::Reference)?;
+            .try_write_named(LockTarget::Reference)?;
         unsafe {
-            let base = ImplConcurrent::try_get_base(&self.inner.state.base)?;
-            let pos = base.add(self.inner.range.0);
+            let base = <ImplConcurrent as StorageDetails<A>>::try_get_base(&self.inner.state.base)?;
+            let pos = self.inner.range.offset_base_unwrap(base);
+
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
                 guard,
@@ -236,8 +241,8 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
     where
         T: RefSizeReq,
     {
-        let base = ImplConcurrent::get_base(&self.inner.state.base)?;
-        let pos = base.add(self.inner.range.0);
+        let base = <ImplConcurrent as StorageDetails<A>>::get_base(&self.inner.state.base)?;
+        let pos = self.inner.range.offset_base_unwrap(base);
         #[cfg(not(feature = "ptr_metadata"))]
         {
             Ok(pos as *mut T)
@@ -283,9 +288,9 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
         T: RefSizeReq,
     {
         let result = self.as_ptr_mut();
-        let inner: *mut ReferenceState<T, ImplConcurrent> = self.inner.as_ref()
-            as *const ReferenceState<T, ImplConcurrent>
-            as *mut ReferenceState<T, ImplConcurrent>;
+        let inner: *mut ReferenceState<T, ImplConcurrent, A> = self.inner.as_ref()
+            as *const ReferenceState<T, ImplConcurrent, A>
+            as *mut ReferenceState<T, ImplConcurrent, A>;
         core::ptr::drop_in_place(&mut (*inner).state);
         core::mem::forget(self.inner);
         result
@@ -293,10 +298,7 @@ impl<T: ?Sized> SyncContiguousEntryRef<T> {
 }
 
 #[cfg(feature = "sync")]
-impl<T: ?Sized> EntryRef for SyncContiguousEntryRef<T> {}
-
-#[cfg(feature = "sync")]
-impl<T: ?Sized> Clone for SyncContiguousEntryRef<T> {
+impl<T: ?Sized, A: MemoryManager> Clone for SyncContiguousEntryRef<T, A> {
     fn clone(&self) -> Self {
         SyncContiguousEntryRef {
             inner: self.inner.clone(),
@@ -319,8 +321,8 @@ impl<T: ?Sized> core::fmt::Debug for SyncContiguousEntryRef<T> {
 
 /// A thread-unsafe reference to `T` data stored in
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemory) structure.
-pub struct ContiguousEntryRef<T: ?Sized> {
-    pub(crate) inner: Rc<ReferenceState<T, ImplDefault>>,
+pub struct ContiguousEntryRef<T: ?Sized, A: MemoryManager> {
+    pub(crate) inner: Rc<ReferenceState<T, ImplDefault, A>>,
     #[cfg(feature = "ptr_metadata")]
     pub(crate) metadata: <T as Pointee>::Metadata,
     #[cfg(not(feature = "ptr_metadata"))]
@@ -328,9 +330,9 @@ pub struct ContiguousEntryRef<T: ?Sized> {
 }
 
 /// A shorter type name for [`ContiguousEntryRef`].
-pub type CERef<T> = ContiguousEntryRef<T>;
+pub type CERef<T, A> = ContiguousEntryRef<T, A>;
 
-impl<T: ?Sized> ContiguousEntryRef<T> {
+impl<T: ?Sized, A: MemoryManager> ContiguousEntryRef<T, A> {
     /// Returns a byte range within container memory this reference points to.
     pub fn range(&self) -> ByteRange {
         self.inner.range
@@ -338,17 +340,17 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
 
     /// Returns a reference to data at its current location and panics if the
     /// represented memory region is mutably borrowed.
-    pub fn get(&self) -> MemoryReadGuard<'_, T, ImplDefault>
+    pub fn get(&self) -> MemoryReadGuard<'_, T, ImplDefault, A>
     where
         T: RefSizeReq,
     {
-        ContiguousEntryRef::<T>::try_get(self).expect("mutably borrowed")
+        ContiguousEntryRef::<T, A>::try_get(self).expect("mutably borrowed")
     }
 
     /// Returns a reference to data at its current location or a
     /// [`RegionBorrowedError`] error if the represented memory region is
     /// mutably borrowed.
-    pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplDefault>, RegionBorrowedError>
+    pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplDefault, A>, RegionBorrowedError>
     where
         T: RefSizeReq,
     {
@@ -362,8 +364,8 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
         }
 
         unsafe {
-            let base = ImplDefault::get_base(&self.inner.state.base);
-            let pos = base.add(self.inner.range.0);
+            let base = <ImplDefault as StorageDetails<A>>::get_base(&self.inner.state.base);
+            let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryReadGuard {
                 state: self.inner.clone(),
@@ -379,11 +381,11 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
 
     /// Returns a mutable reference to data at its current location and panics
     /// if the reference has already been borrowed.
-    pub fn get_mut(&mut self) -> MemoryWriteGuard<'_, T, ImplDefault>
+    pub fn get_mut(&mut self) -> MemoryWriteGuard<'_, T, ImplDefault, A>
     where
         T: RefSizeReq,
     {
-        ContiguousEntryRef::<T>::try_get_mut(self).expect("mutably borrowed")
+        ContiguousEntryRef::<T, A>::try_get_mut(self).expect("mutably borrowed")
     }
 
     /// Returns a mutable reference to data at its current location or a
@@ -391,7 +393,7 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
     /// already borrowed.
     pub fn try_get_mut(
         &mut self,
-    ) -> Result<MemoryWriteGuard<'_, T, ImplDefault>, RegionBorrowedError>
+    ) -> Result<MemoryWriteGuard<'_, T, ImplDefault, A>, RegionBorrowedError>
     where
         T: RefSizeReq,
     {
@@ -404,8 +406,8 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
         }
 
         unsafe {
-            let base = ImplDefault::get_base(&self.inner.state.base);
-            let pos = base.add(self.inner.range.0);
+            let base = <ImplDefault as StorageDetails<A>>::get_base(&self.inner.state.base);
+            let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
@@ -505,8 +507,8 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
     where
         T: RefSizeReq,
     {
-        let base = ImplDefault::get_base(&self.inner.state.base);
-        let pos = base.add(self.inner.range.0);
+        let base = <ImplDefault as StorageDetails<A>>::get_base(&self.inner.state.base);
+        let pos = self.inner.range.offset_base_unwrap(base);
 
         #[cfg(not(feature = "ptr_metadata"))]
         {
@@ -546,18 +548,16 @@ impl<T: ?Sized> ContiguousEntryRef<T> {
         T: RefSizeReq,
     {
         let result = self.as_ptr_mut();
-        let inner: *mut ReferenceState<T, ImplDefault> = self.inner.as_ref()
-            as *const ReferenceState<T, ImplDefault>
-            as *mut ReferenceState<T, ImplDefault>;
+        let inner: *mut ReferenceState<T, ImplDefault, A> = self.inner.as_ref()
+            as *const ReferenceState<T, ImplDefault, A>
+            as *mut ReferenceState<T, ImplDefault, A>;
         core::ptr::drop_in_place(&mut (*inner).state);
         core::mem::forget(self.inner);
         result
     }
 }
 
-impl<T: ?Sized> EntryRef for ContiguousEntryRef<T> {}
-
-impl<T: ?Sized> Clone for ContiguousEntryRef<T> {
+impl<T: ?Sized, A: MemoryManager> Clone for ContiguousEntryRef<T, A> {
     fn clone(&self) -> Self {
         ContiguousEntryRef {
             inner: self.inner.clone(),
@@ -579,13 +579,13 @@ impl<T: ?Sized> core::fmt::Debug for ContiguousEntryRef<T> {
 }
 
 pub(crate) mod sealed {
+    use crate::raw::MemoryManager;
+
     use super::*;
 
-    pub trait EntryRef {}
-
     /// Internal state of [`ContiguousEntryRef`] and [`SyncContiguousEntryRef`].
-    pub struct ReferenceState<T: ?Sized, Impl: ImplDetails> {
-        pub state: Impl::StorageState,
+    pub struct ReferenceState<T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> {
+        pub state: Impl::StorageState<A>,
         pub range: ByteRange,
         pub borrow_kind: Impl::BorrowLock,
         pub drop_fn: DropFn,
@@ -607,7 +607,7 @@ pub(crate) mod sealed {
         }
     }
 
-    impl<T: ?Sized, Impl: ImplDetails> Drop for ReferenceState<T, Impl> {
+    impl<T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Drop for ReferenceState<T, Impl, A> {
         fn drop(&mut self) {
             let base = Impl::get_base(&Impl::deref_state(&self.state).base);
             let tracker = Impl::get_allocation_tracker(&mut self.state);
@@ -634,7 +634,7 @@ use sealed::*;
 /// A smart reference wrapper responsible for tracking and managing a flag
 /// that indicates whether the memory segment is actively being written to.
 #[cfg_attr(feature = "debug", derive(Debug))]
-pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails> {
+pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> {
     state: Impl::RefState<T>,
     #[allow(unused)]
     #[cfg(feature = "sync")]
@@ -642,7 +642,9 @@ pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails> {
     value: &'a mut T,
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails> Deref for MemoryWriteGuard<'a, T, Impl> {
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Deref
+    for MemoryWriteGuard<'a, T, Impl, A>
+{
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -650,13 +652,17 @@ impl<'a, T: ?Sized, Impl: ImplDetails> Deref for MemoryWriteGuard<'a, T, Impl> {
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails> DerefMut for MemoryWriteGuard<'a, T, Impl> {
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> DerefMut
+    for MemoryWriteGuard<'a, T, Impl, A>
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.value
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails> Drop for MemoryWriteGuard<'a, T, Impl> {
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Drop
+    for MemoryWriteGuard<'a, T, Impl, A>
+{
     fn drop(&mut self) {
         Impl::unborrow_ref::<T>(&self.state, BorrowKind::Write);
     }
@@ -665,7 +671,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails> Drop for MemoryWriteGuard<'a, T, Impl> {
 /// A smart reference wrapper responsible for tracking and managing a flag
 /// that indicates whether the memory segment is actively being read from.
 #[cfg_attr(feature = "debug", derive(Debug))]
-pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails> {
+pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> {
     state: Impl::RefState<T>,
     #[allow(unused)]
     #[cfg(feature = "sync")]
@@ -673,7 +679,9 @@ pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails> {
     value: &'a T,
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails> Deref for MemoryReadGuard<'a, T, Impl> {
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Deref
+    for MemoryReadGuard<'a, T, Impl, A>
+{
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -681,7 +689,9 @@ impl<'a, T: ?Sized, Impl: ImplDetails> Deref for MemoryReadGuard<'a, T, Impl> {
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails> Drop for MemoryReadGuard<'a, T, Impl> {
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Drop
+    for MemoryReadGuard<'a, T, Impl, A>
+{
     fn drop(&mut self) {
         Impl::unborrow_ref::<T>(&self.state, BorrowKind::Read);
     }

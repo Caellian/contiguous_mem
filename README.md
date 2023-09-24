@@ -1,7 +1,7 @@
 # contiguous_mem
 
-contiguous_mem streamlines storage and management of data stored in contiguous
-block of memory.
+contiguous_mem is a vector like collection that can store entries with
+heterogeneous layouts while retaining type safety at the reference level.
 
 [![Crate](https://img.shields.io/crates/v/contiguous_mem?style=for-the-badge&logo=docs.rs)](https://crates.io/crates/contiguous_mem)
 [![Documentation](https://img.shields.io/docsrs/contiguous-mem?style=for-the-badge&logo=rust)](https://docs.rs/contiguous-mem)
@@ -76,13 +76,13 @@ struct Data {
 }
 
 fn main() {
-    // Create a ContiguousMemory instance with a capacity of 1024 bytes and 1-byte alignment
-    let mut memory = ContiguousMemory::new(1024);
+    // Create a ContiguousMemory instance
+    let mut memory = ContiguousMemory::new();
 
     // Store data in the memory container
     let data = Data { value: 42 };
-    let stored_number: ContiguousMemoryRef<u64> = memory.push(22u64);
-    let stored_data: ContiguousMemoryRef<Data> = memory.push(data);
+    let stored_number: ContiguousEntryRef<u64, _> = memory.push(22u64);
+    let stored_data: ContiguousEntryRef<Data, _> = memory.push(data);
 
     // Retrieve and use the stored data
     assert_eq!(*stored_data.get(), data);

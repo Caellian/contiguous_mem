@@ -2,6 +2,8 @@
 
 use core::fmt::Display;
 
+use crate::raw::BaseAddress;
+
 /// Represents a range of bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteRange(
@@ -33,6 +35,7 @@ impl ByteRange {
     }
 
     /// Caps the end address of this byte range to the provided `position`.
+    #[inline]
     pub fn cap_end(&self, position: usize) -> Self {
         ByteRange(self.0, position.min(self.1))
     }
@@ -46,6 +49,7 @@ impl ByteRange {
     }
 
     /// Offsets this byte range by a provided unsigned `offset`.
+    #[inline]
     pub fn offset(&self, offset: usize) -> Self {
         ByteRange(self.0 + offset, self.1 + offset)
     }
@@ -59,16 +63,19 @@ impl ByteRange {
     }
 
     /// Returns length of this byte range.
+    #[inline]
     pub fn len(&self) -> usize {
         self.1 - self.0
     }
 
     /// Returns true if this byte range is zero-sized.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.0 == self.1
     }
 
     /// Returns `true` if this byte range contains another byte range `other`.
+    #[inline]
     pub fn contains(&self, other: Self) -> bool {
         self.0 <= other.0 && other.1 <= self.1
     }
@@ -94,6 +101,16 @@ impl ByteRange {
     pub fn apply_union_unchecked(&mut self, other: Self) {
         self.0 = self.0.min(other.0);
         self.1 = self.1.max(other.1);
+    }
+
+    #[inline]
+    pub(crate) fn offset_base<T>(&self, addr: BaseAddress) -> Option<*mut T> {
+        addr.map(|it| (it.as_ptr() as *mut u8 as usize + self.0) as *mut T)
+    }
+
+    #[inline]
+    pub(crate) unsafe fn offset_base_unwrap<T>(&self, addr: BaseAddress) -> *mut T {
+        (unsafe { addr.unwrap_unchecked().as_ptr() } as *mut u8 as usize + self.0) as *mut T
     }
 }
 

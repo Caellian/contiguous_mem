@@ -4,7 +4,7 @@ use core::{alloc::Layout, cmp::Ordering};
 
 #[cfg(feature = "no_std")]
 use crate::types::{vec, Vec};
-use crate::{error::ContiguousMemoryError, range::ByteRange};
+use crate::{error::ContiguousMemoryError, range::ByteRange, raw::BaseAddress};
 
 /// A structure that keeps track of unused regions of memory within provided
 /// bounds.
@@ -38,51 +38,62 @@ impl AllocationTracker {
         ByteRange(0, self.size)
     }
 
+    /// Grows the available memory range represented by this structure to
+    /// provided `new_size`.
+    pub fn grow(&mut self, new_size: usize) {
+        match self.unused.last() {
+            Some(it) => {
+                // check whether the last free region ends at the end of
+                // tracked region
+                if it.1 == self.size {
+                    let last = self
+                        .unused
+                        .last_mut()
+                        .expect("free byte ranges isn't empty");
+                    last.1 = new_size;
+                } else {
+                    self.unused.push(ByteRange(self.size, new_size));
+                }
+            }
+            None => {
+                self.unused.push(ByteRange(self.size, new_size));
+            }
+        }
+        self.size = new_size;
+    }
+
+    /// Tries shrinking the available memory range represented by this structure
+    /// to provided `new_size`, or returns
+    /// [`ContiguousMemoryError::Unshrinkable`] error if the represented memory
+    /// range cannot be shrunk enough to fit the desired size.
+    pub fn shrink(&mut self, new_size: usize) -> Result<(), ContiguousMemoryError> {
+        let last = self
+            .unused
+            .last_mut()
+            .ok_or(ContiguousMemoryError::Unshrinkable {
+                required_size: self.size,
+            })?;
+
+        let reduction = self.size - new_size;
+        if last.len() < reduction {
+            return Err(ContiguousMemoryError::Unshrinkable {
+                required_size: self.size - last.len(),
+            });
+        }
+        last.1 -= reduction;
+        self.size = new_size;
+        Ok(())
+    }
+
     /// Tries resizing the available memory range represented by this structure
-    /// to provided `new_size`, or an [`ContiguousMemoryError::Unshrinkable`]
-    /// error if the represented memory range cannot be shrunk enough to fit
-    /// the desired size.
+    /// to provided `new_size`, or returns
+    /// [`ContiguousMemoryError::Unshrinkable`] error if the represented memory
+    /// range cannot be shrunk enough to fit the desired size.
     pub fn resize(&mut self, new_size: usize) -> Result<(), ContiguousMemoryError> {
         match new_size.cmp(&self.size) {
             Ordering::Equal => {}
-            Ordering::Less => {
-                let last = self
-                    .unused
-                    .last_mut()
-                    .ok_or(ContiguousMemoryError::Unshrinkable {
-                        required_size: self.size,
-                    })?;
-
-                let reduction = self.size - new_size;
-                if last.len() < reduction {
-                    return Err(ContiguousMemoryError::Unshrinkable {
-                        required_size: self.size - last.len(),
-                    });
-                }
-                last.1 -= reduction;
-                self.size = new_size;
-            }
-            Ordering::Greater => {
-                match self.unused.last() {
-                    Some(it) => {
-                        // check whether the last free region ends at the end of
-                        // tracked region
-                        if it.1 == self.size {
-                            let last = self
-                                .unused
-                                .last_mut()
-                                .expect("free byte ranges isn't empty");
-                            last.1 = new_size;
-                        } else {
-                            self.unused.push(ByteRange(self.size, new_size));
-                        }
-                    }
-                    None => {
-                        self.unused.push(ByteRange(self.size, new_size));
-                    }
-                }
-                self.size = new_size;
-            }
+            Ordering::Less => self.shrink(new_size)?,
+            Ordering::Greater => self.grow(new_size),
         }
         Ok(())
     }
@@ -183,9 +194,13 @@ impl AllocationTracker {
     /// requested `layout` cannot be placed within any free regions.
     pub fn take_next(
         &mut self,
-        base_address: usize,
+        base_address: BaseAddress,
         layout: Layout,
     ) -> Result<ByteRange, ContiguousMemoryError> {
+        let base_address = match base_address {
+            Some(it) => (it.as_ptr() as *mut u8) as usize,
+            None => return Err(ContiguousMemoryError::NoStorageLeft),
+        };
         if layout.size() > self.size {
             return Err(ContiguousMemoryError::NoStorageLeft);
         }
@@ -271,7 +286,13 @@ impl core::fmt::Debug for AllocationTracker {
 
 #[cfg(test)]
 mod tests {
+    use crate::raw::null_base;
+
     use super::*;
+
+    fn mock_base(align: usize) -> BaseAddress {
+        unsafe { Some(null_base(align)) }
+    }
 
     #[test]
     fn test_new_allocation_tracker() {
@@ -297,7 +318,7 @@ mod tests {
         let mut tracker = AllocationTracker::new(1024);
 
         let range = tracker
-            .take_next(0, Layout::from_size_align(32, 8).unwrap())
+            .take_next(mock_base(8), Layout::from_size_align(32, 8).unwrap())
             .unwrap();
         assert_eq!(range, ByteRange(0, 32));
 
@@ -321,7 +342,7 @@ mod tests {
         let mut tracker = AllocationTracker::new(1024);
 
         let layout = Layout::from_size_align(128, 8).unwrap();
-        let range = tracker.take_next(0, layout).unwrap();
+        let range = tracker.take_next(mock_base(8), layout).unwrap();
         assert_eq!(range, ByteRange(0, 128));
     }
 }

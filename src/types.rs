@@ -6,8 +6,6 @@ mod std_imports {
     #[cfg(feature = "sync")]
     pub use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-    pub use std::alloc as allocator;
-
     #[cfg(feature = "sync")]
     pub use std::sync::atomic::{AtomicUsize, Ordering};
 }
@@ -23,8 +21,6 @@ mod nostd_imports {
     #[cfg(feature = "sync")]
     pub use spin::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-    pub use alloc::alloc as allocator;
-
     #[cfg(feature = "sync")]
     pub use portable_atomic::{AtomicUsize, Ordering};
 
@@ -35,7 +31,7 @@ mod nostd_imports {
 pub use nostd_imports::*;
 
 #[cfg(feature = "sync")]
-use crate::error::{LockSource, LockingError};
+use crate::error::{LockTarget, LockingError};
 
 /// Trait that adds a method which mimics std `Result::map_err` on a Lock in
 /// order to unify no_std and std environments.
@@ -44,107 +40,107 @@ use crate::error::{LockSource, LockingError};
 /// [MutexGuard] directly.
 #[cfg(feature = "sync")]
 pub(crate) trait MutexTypesafe<T: ?Sized> {
-    fn lock_named(&self, source: LockSource) -> Result<MutexGuard<T>, crate::error::LockingError>;
+    fn lock_named(&self, target: LockTarget) -> Result<MutexGuard<T>, crate::error::LockingError>;
     fn try_lock_named(
         &self,
-        source: LockSource,
+        target: LockTarget,
     ) -> Result<MutexGuard<T>, crate::error::LockingError>;
 }
 #[cfg(all(feature = "sync", not(feature = "no_std")))]
 impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
-    fn lock_named(&self, source: LockSource) -> Result<MutexGuard<T>, crate::error::LockingError> {
+    fn lock_named(&self, target: LockTarget) -> Result<MutexGuard<T>, crate::error::LockingError> {
         match self.lock() {
             Ok(it) => Ok(it),
-            Err(_) => Err(LockingError::Poisoned { source }),
+            Err(_) => Err(LockingError::Poisoned { target }),
         }
     }
     fn try_lock_named(
         &self,
-        source: LockSource,
+        target: LockTarget,
     ) -> Result<MutexGuard<T>, crate::error::LockingError> {
         match self.try_lock() {
             Ok(it) => Ok(it),
-            Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { source }),
-            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { source }),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { target }),
+            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { target }),
         }
     }
 }
 #[cfg(all(feature = "sync", feature = "no_std"))]
 impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
-    fn lock_named(&self, _source: LockSource) -> Result<MutexGuard<T>, LockingError> {
+    fn lock_named(&self, _target: LockTarget) -> Result<MutexGuard<T>, LockingError> {
         Ok(self.lock())
     }
     fn try_lock_named(
         &self,
-        source: LockSource,
+        target: LockTarget,
     ) -> Result<MutexGuard<T>, crate::error::LockingError> {
         match self.try_lock() {
             Some(it) => Ok(it),
-            None => Err(LockingError::WouldBlock { source }),
+            None => Err(LockingError::WouldBlock { target }),
         }
     }
 }
 
 #[cfg(feature = "sync")]
 pub(crate) trait RwLockTypesafe<T: ?Sized> {
-    fn read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError>;
-    fn try_read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError>;
-    fn write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError>;
-    fn try_write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError>;
+    fn read_named(&self, target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError>;
+    fn try_read_named(&self, target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError>;
+    fn write_named(&self, target: LockTarget) -> Result<RwLockWriteGuard<T>, LockingError>;
+    fn try_write_named(&self, target: LockTarget) -> Result<RwLockWriteGuard<T>, LockingError>;
 }
 #[cfg(all(feature = "sync", not(feature = "no_std")))]
 impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
-    fn read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
+    fn read_named(&self, target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError> {
         match self.read() {
             Ok(guard) => Ok(guard),
-            Err(_) => Err(LockingError::Poisoned { source }),
+            Err(_) => Err(LockingError::Poisoned { target }),
         }
     }
 
-    fn try_read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
+    fn try_read_named(&self, target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError> {
         match self.try_read() {
             Ok(guard) => Ok(guard),
-            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { source }),
-            Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { source }),
+            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { target }),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { target }),
         }
     }
 
-    fn write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError> {
+    fn write_named(&self, target: LockTarget) -> Result<RwLockWriteGuard<T>, LockingError> {
         match self.write() {
             Ok(guard) => Ok(guard),
-            Err(_) => Err(LockingError::Poisoned { source }),
+            Err(_) => Err(LockingError::Poisoned { target }),
         }
     }
 
-    fn try_write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError> {
+    fn try_write_named(&self, target: LockTarget) -> Result<RwLockWriteGuard<T>, LockingError> {
         match self.try_write() {
             Ok(guard) => Ok(guard),
-            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { source }),
-            Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { source }),
+            Err(std::sync::TryLockError::WouldBlock) => Err(LockingError::WouldBlock { target }),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(LockingError::Poisoned { target }),
         }
     }
 }
 #[cfg(all(feature = "sync", feature = "no_std"))]
 impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
-    fn read_named(&self, _source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
+    fn read_named(&self, _target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError> {
         Ok(self.read())
     }
 
-    fn try_read_named(&self, source: LockSource) -> Result<RwLockReadGuard<T>, LockingError> {
+    fn try_read_named(&self, target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError> {
         match self.try_read() {
             Some(guard) => Ok(guard),
-            None => Err(LockingError::WouldBlock { source }),
+            None => Err(LockingError::WouldBlock { target }),
         }
     }
 
-    fn write_named(&self, _source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError> {
+    fn write_named(&self, _target: LockTarget) -> Result<RwLockWriteGuard<T>, LockingError> {
         Ok(self.write())
     }
 
-    fn try_write_named(&self, source: LockSource) -> Result<RwLockWriteGuard<T>, LockingError> {
+    fn try_write_named(&self, target: LockTarget) -> Result<RwLockWriteGuard<T>, LockingError> {
         match self.try_write() {
             Some(guard) => Ok(guard),
-            None => Err(LockingError::WouldBlock { source }),
+            None => Err(LockingError::WouldBlock { target }),
         }
     }
 }
@@ -198,4 +194,11 @@ pub(crate) const fn drop_fn<T>() -> fn(*mut ()) {
     } else {
         |_: *mut ()| {}
     }
+}
+
+pub(crate) const fn is_layout_valid(size: usize, align: usize) -> bool {
+    if !align.is_power_of_two() {
+        return false;
+    };
+    return size <= isize::MAX as usize - (align - 1);
 }

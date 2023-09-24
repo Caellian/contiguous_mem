@@ -19,7 +19,7 @@ portable-atomic = { version = "1", default-features = false, optional = true }
 spin = { version = "0.9", optional = true }
 
 [features]
-default = ["sync", "unsafe"]
+default = ["sync", "unsafe", "allocator_api"]
 
 no_std = ["dep:portable-atomic", "dep:spin"]
 debug = []
@@ -31,6 +31,7 @@ unsafe = []
 # Nightly features
 ptr_metadata = []
 error_in_core = []
+allocator_api = []
 
 [dev-dependencies]
 byteorder = "1.4"

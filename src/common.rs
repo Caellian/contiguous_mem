@@ -11,10 +11,12 @@
 use core::{
     alloc::Layout,
     cell::{Cell, RefCell, RefMut},
-    ptr::null_mut,
 };
 
-use crate::types::*;
+use crate::{
+    raw::{BaseAddress, MemoryManager},
+    types::*,
+};
 
 use crate::{
     error::ContiguousMemoryError,
@@ -25,7 +27,7 @@ use crate::{
 };
 
 #[cfg(feature = "sync")]
-use crate::error::{LockSource, LockingError};
+use crate::error::{LockTarget, LockingError};
 #[cfg(feature = "sync")]
 use crate::SyncContiguousEntryRef;
 
@@ -33,10 +35,10 @@ use crate::SyncContiguousEntryRef;
 /// [`reference`](ReferenceDetails) implementations.
 pub trait ImplBase: Sized {
     /// The type representing reference to internal state
-    type StorageState: Clone;
+    type StorageState<A: MemoryManager>;
 
     /// The type of reference returned by store operations.
-    type ReferenceType<T: ?Sized>: Clone;
+    type ReferenceType<T: ?Sized, A: MemoryManager>: Clone;
 
     /// The type representing result of accessing data that is locked in async
     /// context
@@ -54,8 +56,8 @@ pub trait ImplBase: Sized {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplDefault;
 impl ImplBase for ImplDefault {
-    type StorageState = Rc<MemoryState<Self>>;
-    type ReferenceType<T: ?Sized> = ContiguousEntryRef<T>;
+    type StorageState<A: MemoryManager> = Rc<MemoryState<Self, A>>;
+    type ReferenceType<T: ?Sized, A: MemoryManager> = ContiguousEntryRef<T, A>;
     type LockResult<T> = T;
     type ATGuard<'a> = RefMut<'a, AllocationTracker>;
 }
@@ -71,8 +73,8 @@ impl ImplBase for ImplDefault {
 pub struct ImplConcurrent;
 #[cfg(feature = "sync")]
 impl ImplBase for ImplConcurrent {
-    type StorageState = Arc<MemoryState<Self>>;
-    type ReferenceType<T: ?Sized> = SyncContiguousEntryRef<T>;
+    type StorageState<A: MemoryManager> = Arc<MemoryState<Self, A>>;
+    type ReferenceType<T: ?Sized, A: MemoryManager> = SyncContiguousEntryRef<T, A>;
     type LockResult<T> = Result<T, LockingError>;
     type ATGuard<'a> = MutexGuard<'a, AllocationTracker>;
 }
@@ -87,15 +89,15 @@ impl ImplBase for ImplConcurrent {
 pub struct ImplUnsafe;
 #[cfg(feature = "unsafe")]
 impl ImplBase for ImplUnsafe {
-    type StorageState = MemoryState<Self>;
-    type ReferenceType<T: ?Sized> = *mut T;
+    type StorageState<A: MemoryManager> = MemoryState<Self, A>;
+    type ReferenceType<T: ?Sized, A: MemoryManager> = *mut T;
     type LockResult<T> = T;
     type ATGuard<'a> = &'a mut AllocationTracker;
 }
 
 /// Implementation details of
 /// [`ContiguousMemoryStorage`](ContiguousMemoryStorage).
-pub trait StorageDetails: ImplBase {
+pub trait StorageDetails<A: MemoryManager>: ImplBase {
     /// The type representing the base memory and allocation tracking.
     type Base;
 
@@ -109,47 +111,47 @@ pub trait StorageDetails: ImplBase {
     type PushResult<T>;
 
     /// Dereferences the inner state smart pointer and returns it by reference.
-    fn deref_state(state: &Self::StorageState) -> &MemoryState<Self>;
+    fn deref_state(state: &Self::StorageState<A>) -> &MemoryState<Self, A>;
 
     /// Retrieves the base pointer from the base instance.
-    fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8>;
+    fn get_base(base: &Self::Base) -> Self::LockResult<BaseAddress>;
 
     /// Retrieves the base pointer from the base instance. Non blocking version.
-    fn try_get_base(base: &Self::Base) -> Self::LockResult<*mut u8>;
+    fn try_get_base(base: &Self::Base) -> Self::LockResult<BaseAddress>;
 
     /// Retrieves the capacity from the state.
     fn get_capacity(capacity: &Self::SizeType) -> usize;
 
     /// Returns a writable reference to AllocationTracker.
     fn get_allocation_tracker(
-        state: &mut Self::StorageState,
+        state: &mut Self::StorageState<A>,
     ) -> Self::LockResult<Self::ATGuard<'_>>;
 
     /// Deallocates the base memory using layout information.
-    fn deallocate(base: &mut Self::Base, layout: Layout);
+    unsafe fn deallocate(alloc: &A, base: &mut Self::Base, layout: Layout);
 }
 
 #[cfg(feature = "sync")]
-impl StorageDetails for ImplConcurrent {
-    type Base = RwLock<*mut u8>;
+impl<A: MemoryManager> StorageDetails<A> for ImplConcurrent {
+    type Base = RwLock<BaseAddress>;
     type AllocationTracker = Mutex<AllocationTracker>;
     type SizeType = AtomicUsize;
-    type PushResult<T> = Result<Self::ReferenceType<T>, LockingError>;
+    type PushResult<T> = Result<Self::ReferenceType<T, A>, LockingError>;
 
     #[inline]
-    fn deref_state(state: &Self::StorageState) -> &MemoryState<Self> {
+    fn deref_state(state: &Self::StorageState<A>) -> &MemoryState<Self, A> {
         state
     }
 
     #[inline]
-    fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
-        base.read_named(LockSource::BaseAddress)
+    fn get_base(base: &Self::Base) -> Self::LockResult<BaseAddress> {
+        base.read_named(LockTarget::BaseAddress)
             .map(|result| *result)
     }
 
     #[inline]
-    fn try_get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
-        base.try_read_named(LockSource::BaseAddress)
+    fn try_get_base(base: &Self::Base) -> Self::LockResult<BaseAddress> {
+        base.try_read_named(LockTarget::BaseAddress)
             .map(|result| *result)
     }
 
@@ -160,39 +162,39 @@ impl StorageDetails for ImplConcurrent {
 
     #[inline]
     fn get_allocation_tracker(
-        state: &mut Self::StorageState,
+        state: &mut Self::StorageState<A>,
     ) -> Self::LockResult<Self::ATGuard<'_>> {
-        state.tracker.lock_named(LockSource::AllocationTracker)
+        state.tracker.lock_named(LockTarget::AllocationTracker)
     }
 
     #[inline]
-    fn deallocate(base: &mut Self::Base, layout: Layout) {
-        if let Ok(mut lock) = base.write_named(LockSource::BaseAddress) {
-            unsafe { allocator::dealloc(*lock, layout) };
-            *lock = null_mut();
+    unsafe fn deallocate(alloc: &A, base: &mut Self::Base, layout: Layout) {
+        if let Ok(mut lock) = base.write_named(LockTarget::BaseAddress) {
+            unsafe { alloc.deallocate(*lock, layout) };
+            *lock = None;
         }
     }
 }
 
-impl StorageDetails for ImplDefault {
-    type Base = Cell<*mut u8>;
+impl<A: MemoryManager> StorageDetails<A> for ImplDefault {
+    type Base = Cell<BaseAddress>;
     type AllocationTracker = RefCell<AllocationTracker>;
     type SizeType = Cell<usize>;
-    type PushResult<T> = ContiguousEntryRef<T>;
+    type PushResult<T> = ContiguousEntryRef<T, A>;
 
     #[inline]
-    fn deref_state(state: &Self::StorageState) -> &MemoryState<Self> {
+    fn deref_state(state: &Self::StorageState<A>) -> &MemoryState<Self, A> {
         state
     }
 
     #[inline]
-    fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
+    fn get_base(base: &Self::Base) -> Self::LockResult<BaseAddress> {
         base.get()
     }
 
     #[inline]
-    fn try_get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
-        Self::get_base(base)
+    fn try_get_base(base: &Self::Base) -> Self::LockResult<BaseAddress> {
+        <Self as StorageDetails<A>>::get_base(base)
     }
 
     #[inline]
@@ -202,38 +204,38 @@ impl StorageDetails for ImplDefault {
 
     #[inline]
     fn get_allocation_tracker(
-        state: &mut Self::StorageState,
+        state: &mut Self::StorageState<A>,
     ) -> Self::LockResult<Self::ATGuard<'_>> {
         state.tracker.borrow_mut()
     }
 
     #[inline]
-    fn deallocate(base: &mut Self::Base, layout: Layout) {
-        unsafe { allocator::dealloc(base.get(), layout) };
-        base.set(null_mut())
+    unsafe fn deallocate(alloc: &A, base: &mut Self::Base, layout: Layout) {
+        unsafe { alloc.deallocate(base.get(), layout) };
+        base.set(None)
     }
 }
 
 #[cfg(feature = "unsafe")]
-impl StorageDetails for ImplUnsafe {
-    type Base = *mut u8;
+impl<A: MemoryManager> StorageDetails<A> for ImplUnsafe {
+    type Base = BaseAddress;
     type AllocationTracker = AllocationTracker;
     type SizeType = usize;
     type PushResult<T> = Result<*mut T, ContiguousMemoryError>;
 
     #[inline]
-    fn deref_state(state: &Self::StorageState) -> &MemoryState<Self> {
+    fn deref_state(state: &Self::StorageState<A>) -> &MemoryState<Self, A> {
         state
     }
 
     #[inline]
-    fn get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
+    fn get_base(base: &Self::Base) -> Self::LockResult<BaseAddress> {
         *base
     }
 
     #[inline]
-    fn try_get_base(base: &Self::Base) -> Self::LockResult<*mut u8> {
-        Self::get_base(base)
+    fn try_get_base(base: &Self::Base) -> Self::LockResult<BaseAddress> {
+        <Self as StorageDetails<A>>::get_base(base)
     }
 
     #[inline]
@@ -243,22 +245,22 @@ impl StorageDetails for ImplUnsafe {
 
     #[inline]
     fn get_allocation_tracker(
-        state: &mut Self::StorageState,
+        state: &mut Self::StorageState<A>,
     ) -> Self::LockResult<Self::ATGuard<'_>> {
         &mut state.tracker
     }
 
     #[inline]
-    fn deallocate(base: &mut Self::Base, layout: Layout) {
+    unsafe fn deallocate(alloc: &A, base: &mut Self::Base, layout: Layout) {
         unsafe {
-            allocator::dealloc(*base, layout);
+            alloc.deallocate(*base, layout);
         }
-        *base = null_mut();
+        *base = None;
     }
 }
 
 /// Implementation details of returned [reference types](crate::refs).
-pub trait ReferenceDetails: ImplBase {
+pub trait ReferenceDetails<A: MemoryManager>: ImplBase {
     /// The type representing internal state of the reference.
     type RefState<T: ?Sized>: Clone;
 
@@ -273,7 +275,7 @@ pub trait ReferenceDetails: ImplBase {
     /// Releases the specified memory region back to the allocation tracker.
     fn free_region(
         tracker: Self::LockResult<Self::ATGuard<'_>>,
-        base: Self::LockResult<*mut u8>,
+        base: Self::LockResult<BaseAddress>,
         range: ByteRange,
     ) -> Option<*mut ()>;
 
@@ -282,22 +284,22 @@ pub trait ReferenceDetails: ImplBase {
 }
 
 #[cfg(feature = "sync")]
-impl ReferenceDetails for ImplConcurrent {
-    type RefState<T: ?Sized> = Arc<ReferenceState<T, Self>>;
+impl<A: MemoryManager> ReferenceDetails<A> for ImplConcurrent {
+    type RefState<T: ?Sized> = Arc<ReferenceState<T, Self, A>>;
     type BorrowLock = RwLock<()>;
     type ReadGuard<'a> = RwLockReadGuard<'a, ()>;
     type WriteGuard<'a> = RwLockWriteGuard<'a, ()>;
 
     fn free_region(
         tracker: Self::LockResult<Self::ATGuard<'_>>,
-        base: Self::LockResult<*mut u8>,
+        base: Self::LockResult<BaseAddress>,
         range: ByteRange,
     ) -> Option<*mut ()> {
         if let Ok(mut lock) = tracker {
             let _ = lock.release(range);
 
             if let Ok(base) = base {
-                unsafe { Some(base.add(range.0) as *mut ()) }
+                range.offset_base(base)
             } else {
                 None
             }
@@ -307,19 +309,19 @@ impl ReferenceDetails for ImplConcurrent {
     }
 }
 
-impl ReferenceDetails for ImplDefault {
-    type RefState<T: ?Sized> = Rc<ReferenceState<T, Self>>;
+impl<A: MemoryManager> ReferenceDetails<A> for ImplDefault {
+    type RefState<T: ?Sized> = Rc<ReferenceState<T, Self, A>>;
     type BorrowLock = Cell<BorrowState>;
     type ReadGuard<'a> = ();
     type WriteGuard<'a> = ();
 
     fn free_region(
         mut tracker: Self::LockResult<Self::ATGuard<'_>>,
-        base: Self::LockResult<*mut u8>,
+        base: Self::LockResult<BaseAddress>,
         range: ByteRange,
     ) -> Option<*mut ()> {
         let _ = tracker.release(range);
-        unsafe { Some(base.add(range.0) as *mut ()) }
+        range.offset_base(base)
     }
 
     fn unborrow_ref<T: ?Sized>(state: &Self::RefState<T>, _kind: BorrowKind) {
@@ -332,7 +334,7 @@ impl ReferenceDetails for ImplDefault {
 }
 
 #[cfg(feature = "unsafe")]
-impl ReferenceDetails for ImplUnsafe {
+impl<A: MemoryManager> ReferenceDetails<A> for ImplUnsafe {
     type RefState<T: ?Sized> = ();
     type BorrowLock = ();
     type ReadGuard<'a> = ();
@@ -340,12 +342,11 @@ impl ReferenceDetails for ImplUnsafe {
 
     fn free_region(
         tracker: Self::LockResult<Self::ATGuard<'_>>,
-        base: Self::LockResult<*mut u8>,
+        base: Self::LockResult<BaseAddress>,
         range: ByteRange,
     ) -> Option<*mut ()> {
         let _ = tracker.release(range);
-
-        unsafe { Some(base.add(range.0) as *mut ()) }
+        range.offset_base(base)
     }
 }
 
@@ -356,5 +357,11 @@ impl ReferenceDetails for ImplUnsafe {
 /// - [`ImplDefault`]
 /// - [`ImplConcurrent`]
 /// - [`ImplUnsafe`]
-pub trait ImplDetails: ImplBase + StorageDetails + ReferenceDetails {}
-impl<Impl: ImplBase + StorageDetails + ReferenceDetails> ImplDetails for Impl {}
+pub trait ImplDetails<A: MemoryManager>:
+    ImplBase + StorageDetails<A> + ReferenceDetails<A>
+{
+}
+impl<A: MemoryManager, Impl: ImplBase + StorageDetails<A> + ReferenceDetails<A>> ImplDetails<A>
+    for Impl
+{
+}

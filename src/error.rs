@@ -25,12 +25,12 @@ pub enum LockingError {
     /// Not lockable because the mutex/lock was poisoned.
     Poisoned {
         /// Specifies source of poisoning.
-        source: LockSource,
+        target: LockTarget,
     },
     /// Not lockable because the lock would be blocking.
     WouldBlock {
         /// Specifies which mutex/lock would block.
-        source: LockSource,
+        target: LockTarget,
     },
 }
 
@@ -39,25 +39,25 @@ pub enum LockingError {
 impl Display for LockingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            LockingError::Poisoned { source } => write!(
+            LockingError::Poisoned { target } => write!(
                 f,
                 "Cannot acquire lock: {}",
-                match source {
-                    LockSource::BaseAddress => {
+                match target {
+                    LockTarget::BaseAddress => {
                         "base address Mutex was poisoned"
                     }
-                    LockSource::AllocationTracker => "AllocationTracker Mutex was poisoned",
-                    LockSource::Reference =>
+                    LockTarget::AllocationTracker => "AllocationTracker Mutex was poisoned",
+                    LockTarget::Reference =>
                         "reference concurrent mutable access exclusion flag Mutex was poisoned",
                 }
             ),
-            LockingError::WouldBlock { source } => write!(
+            LockingError::WouldBlock { target } => write!(
                 f,
                 "Lock would block the current thread: {}",
-                match source {
-                    LockSource::BaseAddress => "base address already borrowed",
-                    LockSource::AllocationTracker => "AllocationTracker already borrowed",
-                    LockSource::Reference => "reference already borrowed",
+                match target {
+                    LockTarget::BaseAddress => "base address already borrowed",
+                    LockTarget::AllocationTracker => "AllocationTracker already borrowed",
+                    LockTarget::Reference => "reference already borrowed",
                 }
             ),
         }
@@ -66,18 +66,14 @@ impl Display for LockingError {
 
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 #[cfg(feature = "sync")]
-impl Error for LockingError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        None
-    }
-}
+impl Error for LockingError {}
 
 #[cfg(not(feature = "no_std"))]
 #[cfg(feature = "sync")]
 impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
     fn from(_: PoisonError<MutexGuard<'_, *mut u8>>) -> Self {
         LockingError::Poisoned {
-            source: LockSource::BaseAddress,
+            target: LockTarget::BaseAddress,
         }
     }
 }
@@ -87,7 +83,7 @@ impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
 impl From<PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>> for LockingError {
     fn from(_: PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>) -> Self {
         LockingError::Poisoned {
-            source: LockSource::AllocationTracker,
+            target: LockTarget::AllocationTracker,
         }
     }
 }
@@ -112,9 +108,29 @@ impl Display for RegionBorrowedError {
 }
 
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
-impl Error for RegionBorrowedError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        None
+impl Error for RegionBorrowedError {}
+
+/// Unable to handle allocator operation.
+///
+/// This can happen either due to resource exhaustion or the allocator not
+/// supporting a requested operation.
+#[derive(Debug)]
+pub struct MemoryManagerError;
+
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+impl Display for MemoryManagerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "Memory manager error")
+    }
+}
+
+#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+impl Error for MemoryManagerError {}
+
+#[cfg(feature = "allocator_api")]
+impl From<core::alloc::AllocError> for MemoryManagerError {
+    fn from(_: core::alloc::AllocError) -> Self {
+        MemoryManagerError
     }
 }
 
@@ -149,13 +165,15 @@ pub enum ContiguousMemoryError {
     ),
     /// Tried mutably borrowing already borrowed region of memory
     BorrowMut(RegionBorrowedError),
+    /// A memory manager error.
+    MemoryManager(MemoryManagerError),
 }
 
 /// Represents possible poisoning sources for mutexes and locks.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 #[cfg(feature = "sync")]
-pub enum LockSource {
+pub enum LockTarget {
     /// Mutex containing the base memory offset was poisoned.
     BaseAddress,
     /// Allocation tracker mutex was poisoned.
@@ -193,6 +211,7 @@ impl Display for ContiguousMemoryError {
             ContiguousMemoryError::Lock(it) => write!(f, "Poison error: {}", it),
             ContiguousMemoryError::Layout(it) => write!(f, "Layout error: {}", it),
             ContiguousMemoryError::BorrowMut(it) => write!(f, "Borrow mutable error: {}", it),
+            ContiguousMemoryError::MemoryManager(it) => Display::fmt(it, f),
         }
     }
 }
@@ -204,6 +223,7 @@ impl Error for ContiguousMemoryError {
             ContiguousMemoryError::Layout(it) => Some(it),
             #[cfg(feature = "sync")]
             ContiguousMemoryError::Lock(it) => Some(it),
+            ContiguousMemoryError::MemoryManager(it) => Some(it),
             _ => None,
         }
     }
@@ -211,13 +231,26 @@ impl Error for ContiguousMemoryError {
 
 #[cfg(feature = "sync")]
 impl From<LockingError> for ContiguousMemoryError {
-    fn from(layout_err: LockingError) -> Self {
-        ContiguousMemoryError::Lock(layout_err)
+    fn from(err: LockingError) -> Self {
+        ContiguousMemoryError::Lock(err)
     }
 }
 
 impl From<LayoutError> for ContiguousMemoryError {
-    fn from(layout_err: LayoutError) -> Self {
-        ContiguousMemoryError::Layout(layout_err)
+    fn from(err: LayoutError) -> Self {
+        ContiguousMemoryError::Layout(err)
+    }
+}
+
+impl From<MemoryManagerError> for ContiguousMemoryError {
+    fn from(err: MemoryManagerError) -> Self {
+        ContiguousMemoryError::MemoryManager(err)
+    }
+}
+
+#[cfg(feature = "allocator_api")]
+impl From<core::alloc::AllocError> for ContiguousMemoryError {
+    fn from(_: core::alloc::AllocError) -> Self {
+        ContiguousMemoryError::MemoryManager(MemoryManagerError)
     }
 }

@@ -6,7 +6,7 @@ struct Data {
 }
 
 fn main() {
-    let storage = SyncContiguousMemory::new(4096);
+    let storage = SyncContiguousMemory::new_with_capacity(4096);
 
     let mut sent_storage = storage.clone();
     let writer_one =
@@ -21,11 +21,9 @@ fn main() {
             .expect("unable to store Data")
     });
 
-    let stored_number: SyncContiguousEntryRef<u64> =
-        writer_one.join().expect("unable to join number thread");
+    let stored_number = writer_one.join().expect("unable to join number thread");
     let mut stored_number_clone = stored_number.clone();
-    let stored_data: SyncContiguousEntryRef<Data> =
-        writer_two.join().expect("unable to join Data thread");
+    let stored_data = writer_two.join().expect("unable to join Data thread");
 
     let number_ref = stored_number
         .get()
