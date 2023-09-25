@@ -61,6 +61,8 @@ contiguous_mem = { version = "0.4", features = ["no_std"] }
 - [`error_in_core`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/error-in-core.html)
   &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std`
   environment
+- [`allocator_api`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/allocator-api.html)
+  &lt;_nightly_&gt; - enables automatic support for custom allocators
 - `sync` (default) - enables `SyncContiguousMemory` and related error code
   implementation
 - `unsafe` (default) - enables `UnsafeContiguousMemory`

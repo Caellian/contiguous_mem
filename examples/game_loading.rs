@@ -172,7 +172,7 @@ fn load_game_file<T: Load>(file_name: &'static str) -> T {
 }
 
 fn main() {
-    let mut data = UnsafeContiguousMemory::new_with_layout(
+    let mut data = UnsafeContiguousMemory::with_layout(
         Layout::from_size_align(112, align_of::<Level>()).unwrap(),
     );
 

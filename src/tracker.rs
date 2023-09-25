@@ -4,7 +4,7 @@ use core::{alloc::Layout, cmp::Ordering};
 
 #[cfg(feature = "no_std")]
 use crate::types::{vec, Vec};
-use crate::{error::ContiguousMemoryError, range::ByteRange, raw::BaseAddress};
+use crate::{error::AllocationTrackerError, range::ByteRange, raw::BaseAddress};
 
 /// A structure that keeps track of unused regions of memory within provided
 /// bounds.
@@ -64,19 +64,19 @@ impl AllocationTracker {
 
     /// Tries shrinking the available memory range represented by this structure
     /// to provided `new_size`, or returns
-    /// [`ContiguousMemoryError::Unshrinkable`] error if the represented memory
+    /// [`AllocationTrackerError::Unshrinkable`] error if the represented memory
     /// range cannot be shrunk enough to fit the desired size.
-    pub fn shrink(&mut self, new_size: usize) -> Result<(), ContiguousMemoryError> {
+    pub fn shrink(&mut self, new_size: usize) -> Result<(), AllocationTrackerError> {
         let last = self
             .unused
             .last_mut()
-            .ok_or(ContiguousMemoryError::Unshrinkable {
+            .ok_or(AllocationTrackerError::Unshrinkable {
                 required_size: self.size,
             })?;
 
         let reduction = self.size - new_size;
         if last.len() < reduction {
-            return Err(ContiguousMemoryError::Unshrinkable {
+            return Err(AllocationTrackerError::Unshrinkable {
                 required_size: self.size - last.len(),
             });
         }
@@ -87,15 +87,22 @@ impl AllocationTracker {
 
     /// Tries resizing the available memory range represented by this structure
     /// to provided `new_size`, or returns
-    /// [`ContiguousMemoryError::Unshrinkable`] error if the represented memory
+    /// [`AllocationTrackerError::Unshrinkable`] error if the represented memory
     /// range cannot be shrunk enough to fit the desired size.
-    pub fn resize(&mut self, new_size: usize) -> Result<(), ContiguousMemoryError> {
+    pub fn resize(&mut self, new_size: usize) -> Result<(), AllocationTrackerError> {
         match new_size.cmp(&self.size) {
             Ordering::Equal => {}
             Ordering::Less => self.shrink(new_size)?,
             Ordering::Greater => self.grow(new_size),
         }
         Ok(())
+    }
+
+    pub fn min_len(&self) -> usize {
+        match self.unused.last() {
+            Some(it) if it.1 == self.size => self.size - it.len(),
+            _ => self.size,
+        }
     }
 
     /// Removes tailing area of tracked memory bounds if it is marked as free
@@ -154,13 +161,13 @@ impl AllocationTracker {
     /// Tries marking the provided memory `region` as not free, returning one
     /// of the following errors if that's not possible:
     ///
-    /// - [`ContiguousMemoryError::NotContained`]: If the provided region falls
+    /// - [`AllocationTrackerError::NotContained`]: If the provided region falls
     ///   outside of the memory tracked by the `AllocationTracker`.
-    /// - [`ContiguousMemoryError::AlreadyUsed`]: If the provided region isn't
+    /// - [`AllocationTrackerError::AlreadyUsed`]: If the provided region isn't
     ///   free.
-    pub fn take(&mut self, region: ByteRange) -> Result<(), ContiguousMemoryError> {
+    pub fn take(&mut self, region: ByteRange) -> Result<(), AllocationTrackerError> {
         if self.whole_range().contains(region) {
-            return Err(ContiguousMemoryError::NotContained);
+            std::panic::panic_any(AllocationTrackerError::NotContained);
         }
 
         let (i, found) = self
@@ -168,7 +175,7 @@ impl AllocationTracker {
             .iter()
             .enumerate()
             .find(|(_, it)| it.contains(region))
-            .ok_or(ContiguousMemoryError::AlreadyUsed)?;
+            .ok_or(AllocationTrackerError::AlreadyUsed)?;
 
         let (left, right) = found.difference_unchecked(region);
 
@@ -190,19 +197,19 @@ impl AllocationTracker {
     /// `layout`.
     ///
     /// On success, it returns a [`ByteRange`] of the memory region that was
-    /// taken, or a [`ContiguousMemoryError::NoStorageLeft`] error if the
+    /// taken, or a [`AllocationTrackerError::FullCapacity`] error if the
     /// requested `layout` cannot be placed within any free regions.
     pub fn take_next(
         &mut self,
         base_address: BaseAddress,
         layout: Layout,
-    ) -> Result<ByteRange, ContiguousMemoryError> {
+    ) -> Result<ByteRange, AllocationTrackerError> {
         let base_address = match base_address {
             Some(it) => (it.as_ptr() as *mut u8) as usize,
-            None => return Err(ContiguousMemoryError::NoStorageLeft),
+            None => return Err(AllocationTrackerError::NoFreeMemory),
         };
         if layout.size() > self.size {
-            return Err(ContiguousMemoryError::NoStorageLeft);
+            return Err(AllocationTrackerError::NoFreeMemory);
         }
 
         let (i, available) = self
@@ -221,7 +228,7 @@ impl AllocationTracker {
 
                 aligned.len() >= layout.size()
             })
-            .ok_or(ContiguousMemoryError::NoStorageLeft)?;
+            .ok_or(AllocationTrackerError::NoFreeMemory)?;
 
         let taken = available.aligned(layout.align()).cap_size(layout.size());
 
@@ -241,12 +248,21 @@ impl AllocationTracker {
         Ok(taken)
     }
 
-    /// Tries marking the provided memory `region` as free, returning a
-    /// [`ContiguousMemoryError::NotContained`] error if the provided region
-    /// falls outside of the memory tracked by the `AllocationTracker`.
-    pub fn release(&mut self, region: ByteRange) -> Result<(), ContiguousMemoryError> {
+    /// Tries marking the provided memory `region` as free.
+    ///
+    /// # Errors
+    ///
+    /// In _release mode_ this function never fails.
+    ///
+    /// In _debug mode_ this function can return:
+    /// - [`AllocationTrackerError::NotContained`] error if the provided region
+    ///   falls outside of the memory tracked by the `AllocationTracker`.
+    /// - [`AllocationTrackerError::DoubleFree`] error if the provided region is
+    ///   
+    pub fn release(&mut self, region: ByteRange) -> Result<(), AllocationTrackerError> {
+        #[cfg(debug_assertions)]
         if !self.whole_range().contains(region) {
-            return Err(ContiguousMemoryError::NotContained);
+            return Err(AllocationTrackerError::NotContained);
         }
 
         if let Some(found) = self
@@ -254,8 +270,9 @@ impl AllocationTracker {
             .iter_mut()
             .find(|it| region.1 == it.0 || it.1 == region.0 || it.contains(region))
         {
-            if found.contains(region) {
-                return Err(ContiguousMemoryError::DoubleFree);
+            #[cfg(debug_assertions)]
+            if found.overlaps(region) {
+                return Err(AllocationTrackerError::DoubleFree);
             }
             found.apply_union_unchecked(region);
         } else if let Some((i, _)) = self.unused.iter().enumerate().find(|it| it.0 > region.0) {
@@ -295,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn test_new_allocation_tracker() {
+    fn new_allocation_tracker() {
         let tracker = AllocationTracker::new(1024);
         assert_eq!(tracker.len(), 1024);
         assert_eq!(tracker.is_empty(), false);
@@ -303,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resize_allocation_tracker() {
+    fn resize_allocation_tracker() {
         let mut tracker = AllocationTracker::new(1024);
 
         tracker.resize(512).unwrap();
@@ -314,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_and_release_allocation_tracker() {
+    fn take_and_release_allocation_tracker() {
         let mut tracker = AllocationTracker::new(1024);
 
         let range = tracker
@@ -329,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn test_peek_next_allocation_tracker() {
+    fn peek_next_allocation_tracker() {
         let tracker = AllocationTracker::new(1024);
 
         let layout = Layout::from_size_align(64, 8).unwrap();
@@ -338,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_next_allocation_tracker() {
+    fn take_next_allocation_tracker() {
         let mut tracker = AllocationTracker::new(1024);
 
         let layout = Layout::from_size_align(128, 8).unwrap();

@@ -19,16 +19,15 @@ use crate::{
 };
 
 use crate::{
-    error::ContiguousMemoryError,
     range::ByteRange,
     refs::{sealed::*, ContiguousEntryRef},
     tracker::AllocationTracker,
     MemoryState,
 };
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 use crate::error::{LockTarget, LockingError};
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 use crate::SyncContiguousEntryRef;
 
 /// Implementation details shared between [storage](StorageDetails) and
@@ -69,9 +68,9 @@ impl ImplBase for ImplDefault {
 /// [`SyncContiguousMemory`](crate::SyncContiguousMemory)
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 pub struct ImplConcurrent;
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 impl ImplBase for ImplConcurrent {
     type StorageState<A: MemoryManager> = Arc<MemoryState<Self, A>>;
     type ReferenceType<T: ?Sized, A: MemoryManager> = SyncContiguousEntryRef<T, A>;
@@ -85,9 +84,9 @@ impl ImplBase for ImplConcurrent {
 /// [`UnsafeContiguousMemory`](crate::UnsafeContiguousMemory)
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 pub struct ImplUnsafe;
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 impl ImplBase for ImplUnsafe {
     type StorageState<A: MemoryManager> = MemoryState<Self, A>;
     type ReferenceType<T: ?Sized, A: MemoryManager> = *mut T;
@@ -106,9 +105,6 @@ pub trait StorageDetails<A: MemoryManager>: ImplBase {
 
     /// The type representing [`Layout`] entries with inner mutability.
     type SizeType;
-
-    /// The type representing result of storing data.
-    type PushResult<T>;
 
     /// Dereferences the inner state smart pointer and returns it by reference.
     fn deref_state(state: &Self::StorageState<A>) -> &MemoryState<Self, A>;
@@ -131,12 +127,11 @@ pub trait StorageDetails<A: MemoryManager>: ImplBase {
     unsafe fn deallocate(alloc: &A, base: &mut Self::Base, layout: Layout);
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 impl<A: MemoryManager> StorageDetails<A> for ImplConcurrent {
     type Base = RwLock<BaseAddress>;
     type AllocationTracker = Mutex<AllocationTracker>;
     type SizeType = AtomicUsize;
-    type PushResult<T> = Result<Self::ReferenceType<T, A>, LockingError>;
 
     #[inline]
     fn deref_state(state: &Self::StorageState<A>) -> &MemoryState<Self, A> {
@@ -180,7 +175,6 @@ impl<A: MemoryManager> StorageDetails<A> for ImplDefault {
     type Base = Cell<BaseAddress>;
     type AllocationTracker = RefCell<AllocationTracker>;
     type SizeType = Cell<usize>;
-    type PushResult<T> = ContiguousEntryRef<T, A>;
 
     #[inline]
     fn deref_state(state: &Self::StorageState<A>) -> &MemoryState<Self, A> {
@@ -216,12 +210,11 @@ impl<A: MemoryManager> StorageDetails<A> for ImplDefault {
     }
 }
 
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 impl<A: MemoryManager> StorageDetails<A> for ImplUnsafe {
     type Base = BaseAddress;
     type AllocationTracker = AllocationTracker;
     type SizeType = usize;
-    type PushResult<T> = Result<*mut T, ContiguousMemoryError>;
 
     #[inline]
     fn deref_state(state: &Self::StorageState<A>) -> &MemoryState<Self, A> {
@@ -283,7 +276,7 @@ pub trait ReferenceDetails<A: MemoryManager>: ImplBase {
     fn unborrow_ref<T: ?Sized>(_state: &Self::RefState<T>, _kind: BorrowKind) {}
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 impl<A: MemoryManager> ReferenceDetails<A> for ImplConcurrent {
     type RefState<T: ?Sized> = Arc<ReferenceState<T, Self, A>>;
     type BorrowLock = RwLock<()>;
@@ -333,7 +326,7 @@ impl<A: MemoryManager> ReferenceDetails<A> for ImplDefault {
     }
 }
 
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 impl<A: MemoryManager> ReferenceDetails<A> for ImplUnsafe {
     type RefState<T: ?Sized> = ();
     type BorrowLock = ();

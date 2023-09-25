@@ -21,7 +21,7 @@ impl Greetable for Dog {
 }
 
 fn main() {
-    let mut storage = ContiguousMemory::new_with_capacity(4096);
+    let mut storage = ContiguousMemory::with_capacity(4096);
     let person1 = storage.push(Person("Joe".to_string()));
 
     let person2: ContiguousEntryRef<dyn Greetable> =

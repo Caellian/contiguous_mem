@@ -18,14 +18,14 @@ pub mod refs;
 pub mod tracker;
 mod types;
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 mod sync;
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 pub use sync::SyncContiguousMemory;
 
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 mod unsafe_impl;
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 pub use unsafe_impl::UnsafeContiguousMemory;
 
 // Re-exports
@@ -36,7 +36,7 @@ pub mod memory {
 }
 pub use memory::*;
 pub use refs::{CERef, ContiguousEntryRef};
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 pub use refs::{SCERef, SyncContiguousEntryRef};
 #[cfg(feature = "ptr_metadata")]
 pub use types::static_metadata;
@@ -51,7 +51,7 @@ use core::{
 };
 
 use common::*;
-use error::ContiguousMemoryError;
+use error::{AllocationTrackerError, MemoryError};
 use range::ByteRange;
 use raw::*;
 use refs::sealed::{BorrowState, ReferenceState};
@@ -71,7 +71,7 @@ use types::*;
 /// need to copy the memory region into a new container see:
 /// [`ContiguousMemory::copy_data`]
 ///
-/// # Example
+/// # Examples
 ///
 /// ```rust
 #[doc = include_str!("../examples/default_impl.rs")]
@@ -82,8 +82,14 @@ pub struct ContiguousMemory<A: MemoryManager = DefaultMemoryManager> {
 }
 
 impl ContiguousMemory {
-    /// Creates a new zero-sized `ContiguousMemory` instance aligned with
-    /// alignment of `usize`.
+    /// Creates a new, empty `ContiguousMemory` instance aligned with alignment
+    /// of `usize`.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # #![allow(unused_mut)]
+    /// let mut storage = ContiguousMemory::new();
+    /// ```
     pub fn new() -> Self {
         Self {
             inner: unsafe {
@@ -100,14 +106,22 @@ impl ContiguousMemory {
     ///
     /// Panics if capacity exceeds `isize::MAX` bytes or the allocator can't
     /// provide required amount of memory.
-    pub fn new_with_capacity(capacity: usize) -> Self {
+    ///
+    /// # Examples
+    /// ```rust
+    /// # #![allow(unused_mut)]
+    /// let mut storage = ContiguousMemory::with_capacity(1024);
+    /// # assert_eq!(storage.get_capacity(), 1024);
+    /// # assert_eq!(storage.get_align(), core::mem::align_of::<usize>());
+    /// ```
+    pub fn with_capacity(capacity: usize) -> Self {
         if !is_layout_valid(capacity, align_of::<usize>()) {
             panic!(
                 "capacity too large; max: {}",
                 isize::MAX as usize - (align_of::<usize>() - 1)
             )
         }
-        Self::new_with_layout(unsafe {
+        Self::with_layout(unsafe {
             Layout::from_size_align_unchecked(capacity, align_of::<usize>())
         })
     }
@@ -119,7 +133,20 @@ impl ContiguousMemory {
     ///
     /// Panics if capacity exceeds `isize::MAX` bytes or the allocator can't
     /// provide required amount of memory.
-    pub fn new_with_layout(layout: Layout) -> Self {
+    ///
+    /// # Examples
+    /// ```rust
+    /// # #![allow(unused_mut)]
+    /// # use core::mem::align_of;
+    /// use core::alloc::Layout;
+    ///
+    /// let mut storage = ContiguousMemory::with_layout(
+    ///     Layout::from_size_align(512, align_of::<u32>()).unwrap()
+    /// );
+    /// # assert_eq!(storage.get_capacity(), 1024);
+    /// # assert_eq!(storage.get_align(), align_of::<u32>());
+    /// ```
+    pub fn with_layout(layout: Layout) -> Self {
         Self {
             inner: match MemoryState::new(layout) {
                 Ok(it) => it,
@@ -130,9 +157,20 @@ impl ContiguousMemory {
 }
 
 impl<A: MemoryManager> ContiguousMemory<A> {
-    /// Creates a new zero-sized `ContiguousMemory` instance aligned with
-    /// alignment of `usize`.
-    pub fn new_with_alloc(alloc: A) -> Self {
+    /// Creates a new, empty `ContiguousMemory` instance aligned with alignment
+    /// of `usize` that uses the specified allocator.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # #![allow(unused_mut)]
+    /// # use core::mem::align_of;
+    /// let mut storage = ContiguousMemory::with_alloc(
+    ///     DefaultMemoryManager
+    /// );
+    /// # assert_eq!(storage.get_capacity(), 0);
+    /// # assert_eq!(storage.get_align(), align_of::<usize>());
+    /// ```
+    pub fn with_alloc(alloc: A) -> Self {
         unsafe {
             Self {
                 inner: MemoryState::new_with_alloc(
@@ -146,7 +184,19 @@ impl<A: MemoryManager> ContiguousMemory<A> {
 
     /// Creates a new `ContiguousMemory` instance with the specified `capacity`,
     /// aligned with alignment of `usize`.
-    pub fn new_with_capacity_and_alloc(capacity: usize, alloc: A) -> Self {
+    ///
+    /// # Examples
+    /// ```rust
+    /// # #![allow(unused_mut)]
+    /// # use core::mem::align_of;
+    /// let mut storage = ContiguousMemory::with_capacity_and_alloc(
+    ///     256,
+    ///     DefaultMemoryManager
+    /// );
+    /// # assert_eq!(storage.get_capacity(), 256);
+    /// # assert_eq!(storage.get_align(), align_of::<usize>());
+    /// ```
+    pub fn with_capacity_and_alloc(capacity: usize, alloc: A) -> Self {
         if !is_layout_valid(capacity, align_of::<usize>()) {
             panic!(
                 "capacity too large; max: {}",
@@ -154,7 +204,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
             )
         }
         unsafe {
-            Self::new_with_layout_and_alloc(
+            Self::with_layout_and_alloc(
                 Layout::from_size_align_unchecked(capacity, align_of::<usize>()),
                 alloc,
             )
@@ -164,12 +214,28 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// Creates a new `ContiguousMemory` instance with capacity and alignment of
     /// the provided `layout`.
     ///
-    /// This method will panic if there's no more memory available.
-    pub fn new_with_layout_and_alloc(layout: Layout, alloc: A) -> Self {
+    /// # Panics
+    ///
+    /// Panics if the provided allocator fails to allocate initial `layout`.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # #![allow(unused_mut)]
+    /// # use core::mem::align_of;
+    /// use core::alloc::Layout;
+    ///
+    /// let mut storage = ContiguousMemory::with_layout_and_alloc(
+    ///     Layout::from_size_align(0, align_of::<u32>()).unwrap(),
+    ///     DefaultMemoryManager
+    /// );
+    /// # assert_eq!(storage.get_capacity(), 0);
+    /// # assert_eq!(storage.get_align(), align_of::<u32>());
+    /// ```
+    pub fn with_layout_and_alloc(layout: Layout, alloc: A) -> Self {
         Self {
             inner: match MemoryState::new_with_alloc(layout, alloc) {
                 Ok(it) => it,
-                Err(_) => unreachable!("unable to create a container with layout: {:?}", layout),
+                Err(_) => panic!("unable to create a container with layout: {:?}", layout),
             },
         }
     }
@@ -231,32 +297,42 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// Resizes the memory container to the specified `new_capacity`, optionally
     /// returning the new base address and size of the stored items.
     ///
-    /// If the base address of the memory block is the same the returned value
-    /// is `None`. If `new_capacity` is 0, the retuned pointer will be an
+    /// If the base address of the memory block stays the same the returned
+    /// value is `None`. If `new_capacity` is 0, the retuned pointer will be an
     /// invalid pointer with container alignment.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// [`ContiguousMemoryError::Unshrinkable`] error is returned when
-    /// attempting to shrink the memory container, but previously stored data
-    /// prevents the container from being shrunk to the desired capacity.
+    /// Panics if the new capacity exceeds `isize::MAX` or the allocator
+    /// operation fails.
+    pub fn resize(&mut self, new_capacity: usize) -> Option<BasePtr> {
+        match self.try_resize(new_capacity) {
+            Ok(it) => it,
+            Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
+            Err(MemoryError::Allocator(_)) => panic!("allocator error"),
+        }
+    }
+
+    /// Tries resizing the memory container to the specified `new_capacity`,
+    /// optionally returning the new base address and size of the stored items,
+    /// or a [`MemoryError`] if the new capacity exceeds `isize::MAX` or the
+    /// allocator can't allocate required memory.
     ///
-    /// [`ContiguousMemoryError::Layout`] error is returned when attempting to
-    /// grow the container to a capacity larger than addressable by the target.
-    ///
-    /// [`ContiguousMemoryError::MemoryManager`] error is returned when
-    /// the allocator can't allocate a memory region with `new_capacity`
-    /// because it either exceeds `isize::MAX` or allocator is out of memory.
-    pub fn resize(
-        &mut self,
-        new_capacity: usize,
-    ) -> Result<Option<BasePtr>, ContiguousMemoryError> {
+    /// If the base address of the memory block stays the same the returned
+    /// value is `None`. If `new_capacity` is 0, the retuned pointer will be an
+    /// invalid pointer with container alignment.
+    pub fn try_resize(&mut self, new_capacity: usize) -> Result<Option<BasePtr>, MemoryError> {
         let old_capacity = self.get_capacity();
+        let mut tracker = self.inner.tracker.borrow_mut();
+        let new_capacity = core::cmp::max(tracker.min_len(), new_capacity);
         if new_capacity == old_capacity {
             return Ok(None);
         }
 
-        self.inner.tracker.borrow_mut().resize(new_capacity)?;
+        tracker
+            .resize(new_capacity)
+            .expect("unable to resize allocation tracker");
+
         let old_layout = self.get_layout();
         let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)?;
         let prev_base = self.get_base();
@@ -279,20 +355,30 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     }
 
     /// Grows the underlying memory by specified `additional` bytes.
+    ///
     /// After calling this function, new capacity will be equal to:
     /// `self.get_capacity() + additional`.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// [`ContiguousMemoryError::Layout`] error is returned when attempting to
-    /// grow the container to a capacity larger than addressable by the target.
-    ///
-    /// [`ContiguousMemoryError::MemoryManager`] error is returned when
-    /// the allocator can't allocate a memory region with required resulting
-    /// size because it either exceeds `isize::MAX` or allocator is out of
-    /// memory.
+    /// Panics if attempting to grow the container to a capacity larger than
+    /// `isize::MAX` or the allocator can't allocate required memory.
     #[inline]
-    pub fn reserve(&mut self, additional: usize) -> Result<Option<BasePtr>, ContiguousMemoryError> {
+    pub fn reserve(&mut self, additional: usize) -> Option<BasePtr> {
+        match self.try_reserve(additional) {
+            Ok(it) => it,
+            Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
+            Err(MemoryError::Allocator(_)) => panic!("unable to allocate more memory"),
+        }
+    }
+
+    /// Tries grows the underlying memory by specified `additional` bytes,
+    /// returning a [`MemoryError`] error if the new capacity exceeds
+    /// `isize::MAX` or the allocator can't allocate required memory.
+    ///
+    /// After calling this function, new capacity will be equal to:
+    /// `self.get_capacity() + additional`.
+    pub fn try_reserve(&mut self, additional: usize) -> Result<Option<BasePtr>, MemoryError> {
         if additional == 0 {
             return Ok(None);
         }
@@ -305,22 +391,20 @@ impl<A: MemoryManager> ContiguousMemory<A> {
         let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)?;
         let prev_base = self.get_base();
 
-        let new_base = unsafe { self.inner.alloc.grow(prev_base, old_layout, new_layout)? };
+        let new_base = unsafe {
+            self.inner
+                .alloc
+                .grow(prev_base, old_layout, new_layout)?
+                .unwrap_unchecked()
+        };
 
-        self.inner.base.set(new_base);
+        self.inner.base.set(Some(new_base));
         self.inner.capacity.set(new_capacity);
-        Ok(if new_base != prev_base {
-            Some(new_base.unwrap_or_else(|| unsafe { null_base(new_layout.align()) }))
+        Ok(if Some(new_base) != prev_base {
+            Some(new_base)
         } else {
             None
         })
-    }
-
-    pub fn try_reserve(
-        &mut self,
-        additional: usize,
-    ) -> Result<Option<BasePtr>, ContiguousMemoryError> {
-        todo!()
     }
 
     /// Reserves additional bytes required to store a value with provided
@@ -330,63 +414,126 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// After calling this function, new capacity will be equal to:
     /// `self.get_capacity() + padding + size_of::<V>()`.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// See: [`ContiguousMemory::reserve`]
-    pub fn reserve_layout(
-        &mut self,
-        layout: Layout,
-    ) -> Result<Option<BasePtr>, ContiguousMemoryError> {
+    /// Panics if attempting to grow the container to a capacity larger than
+    /// `isize::MAX` or the allocator can't allocate required memory.
+    #[inline]
+    pub fn reserve_layout(&mut self, layout: Layout) -> Option<BasePtr> {
+        match self.try_reserve_layout(layout) {
+            Ok(it) => it,
+            Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
+            Err(MemoryError::Allocator(_)) => panic!("unable to allocate more memory"),
+        }
+    }
+
+    /// Reserves additional bytes required to store a value with provided
+    /// `layout` while keeping it aligned, returning or
+    /// a [`MemoryError`] error if
+    /// the new capacity exceeds `isize::MAX` or the allocator can't allocate
+    /// required memory.
+    ///
+    /// After calling this function, new capacity will be equal to:
+    /// `self.get_capacity() + padding + layout.size()`.
+    pub fn try_reserve_layout(&mut self, layout: Layout) -> Result<Option<BasePtr>, MemoryError> {
+        if layout.size() == 0 {
+            return Ok(None);
+        }
         match self.get_base() {
             Some(base) => {
                 let last =
                     unsafe { (base.as_ptr() as *mut u8).add(self.inner.tracker.borrow().len()) };
                 let align_offset = last.align_offset(layout.align());
-                self.reserve(align_offset + layout.size())
+                self.try_reserve(align_offset + layout.size())
             }
-            None => self.reserve(layout.size()),
+            None => {
+                self.inner.tracker.borrow_mut().grow(layout.size());
+                let new_layout = Layout::from_size_align(
+                    layout.size(),
+                    core::cmp::max(self.inner.alignment, layout.align()),
+                )?;
+
+                let new_base = unsafe { self.inner.alloc.allocate(new_layout)?.unwrap_unchecked() };
+
+                self.inner.base.set(Some(new_base));
+                self.inner.capacity.set(layout.size());
+                Ok(Some(new_base))
+            }
         }
     }
 
-    pub fn shrink_to(&mut self, new_capacity: usize) {
-        todo!()
+    /// Shrinks the capacity with a lower bound and returns the base pointer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the allocator wasn't able to shrink the allocated memory
+    /// region.
+    pub fn shrink_to(&mut self, new_capacity: usize) -> BaseAddress {
+        let mut tracker = self.inner.tracker.borrow_mut();
+        let new_capacity = core::cmp::max(tracker.min_len(), new_capacity);
+
+        tracker
+            .shrink(new_capacity)
+            .expect("unable to shrink the allocation tracker");
+        let prev_base = self.inner.base.get();
+        let old_layout = self.get_layout();
+        if new_capacity == old_layout.size() {
+            return prev_base;
+        }
+
+        let new_layout = unsafe {
+            // SAFETY: Previous layout was valid and had valid alignment,
+            // new one is smaller with same alignment so it must be
+            // valid as well.
+            Layout::from_size_align_unchecked(new_capacity, old_layout.align())
+        };
+        let new_base = unsafe {
+            self.inner
+                .alloc
+                .shrink(prev_base, self.get_layout(), new_layout)
+        }
+        .expect("unable to shrink the container");
+        self.inner.base.set(new_base);
+        self.inner.capacity.set(new_capacity);
+        new_base
     }
 
-    /// Shrinks the allocated memory to fit the currently stored data and
-    /// returns the base pointer.
+    /// Shrinks the capacity to fit the currently stored data and returns the
+    /// base pointer.
     pub fn shrink_to_fit(&mut self) -> BaseAddress {
-        if let Some(new_capacity) = self.inner.tracker.borrow_mut().shrink_to_fit() {
-            let prev_base = self.inner.base.get();
-            let old_layout = self.get_layout();
-            let new_layout = unsafe {
-                // SAFETY: Previous layout was valid and had valid alignment,
-                // new one is smaller with same alignment so it must be
-                // valid as well.
-                Layout::from_size_align_unchecked(new_capacity, old_layout.align())
-            };
-            let new_base = unsafe {
-                self.inner
-                    .alloc
-                    .shrink(prev_base, self.get_layout(), new_layout)
-            }
-            .expect("unable to shrink allocated memory");
-            self.inner.base.set(new_base);
-            self.inner.capacity.set(new_capacity);
-            new_base
-        } else {
-            self.get_base()
+        let prev_base = self.inner.base.get();
+        let new_capacity = match self.inner.tracker.borrow_mut().shrink_to_fit() {
+            Some(it) => it,
+            None => return prev_base,
+        };
+        let old_layout = self.get_layout();
+        let new_layout = unsafe {
+            // SAFETY: Previous layout was valid and had valid alignment,
+            // new one is smaller with same alignment so it must be
+            // valid as well.
+            Layout::from_size_align_unchecked(new_capacity, old_layout.align())
+        };
+        let new_base = unsafe {
+            self.inner
+                .alloc
+                .shrink(prev_base, self.get_layout(), new_layout)
         }
+        .expect("unable to shrink the container");
+        self.inner.base.set(new_base);
+        self.inner.capacity.set(new_capacity);
+        new_base
     }
 
     /// Stores a `value` of type `T` in the contiguous memory block and returns
     /// a [`reference`](ContiguousEntryRef) to it.
     ///
-    /// Value type argument `T` is used to deduce type size and returned
+    /// Value type argument `T` is used to infer type size and returned
     /// reference dropping behavior.
     ///
     /// # Panics
     ///
-    /// Panics if the new capacity exceeds `isize::MAX` bytes.
+    /// Panics if the collection needs to grow and new capacity exceeds
+    /// `isize::MAX` bytes or allocation of additional memory fails.
     pub fn push<T>(&mut self, value: T) -> ContiguousEntryRef<T, A> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
@@ -400,6 +547,11 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// dropped.
     ///
     /// See [`ContiguousMemory::push`] for details.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the collection needs to grow and new capacity exceeds
+    /// `isize::MAX` bytes or allocation of additional memory fails.
     pub fn push_persisted<T>(&mut self, value: T) -> ContiguousEntryRef<T, A> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
@@ -408,31 +560,16 @@ impl<A: MemoryManager> ContiguousMemory<A> {
         unsafe { self.push_raw_persisted(pos, layout) }
     }
 
-    /// Works same as [`push`](ContiguousMemory::push) but takes a pointer and
-    /// layout.
+    /// Works same as [`push`](ContiguousMemory::push) but takes a `data`
+    /// pointer and `layout`.
     ///
-    /// Pointer type is used to deduce the destruction behavior for
-    /// implementations that return a reference, but can be disabled by casting
-    /// the provided pointer into `*const ()` type and then calling
-    /// [`transmute`](core::mem::transmute) on the returned reference:
-    /// ```rust
-    /// # use contiguous_mem::*;
-    /// # use core::alloc::Layout;
-    /// # use core::mem;
-    /// # let mut storage = ContiguousMemory::new();
-    /// let value = vec!["ignore", "drop", "for", "me"];
-    /// let erased = &value as *const Vec<&str> as *const ();
-    /// let layout = Layout::new::<Vec<&str>>();
-    ///
-    /// let stored: CERef<Vec<&str>, DefaultMemoryManager> = unsafe {
-    ///     mem::transmute(storage.push_raw(erased, layout))
-    /// };
-    /// ```
+    /// Pointer type `T` is used to infer the drop behavior of the returned
+    /// reference.
     ///
     /// # Panics
     ///
-    /// Panics if the new capacity exceeds `isize::MAX` bytes or allocation of
-    /// additional memory fails.
+    /// Panics if the collection needs to grow and new capacity exceeds
+    /// `isize::MAX` bytes or allocation of additional memory fails.
     ///
     /// # Safety
     ///
@@ -442,6 +579,26 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     ///
     /// Further, it also allows escaping type drop glue because it takes type
     /// [`Layout`] as a separate argument.
+    ///
+    /// # Examples
+    ///
+    /// Disabling drop handling by casting the provided pointer into `*const ()`
+    /// type and then calling [`transmute`](core::mem::transmute) on the
+    /// returned reference:
+    /// ```rust
+    /// # use contiguous_mem::*;
+    /// # use core::alloc::Layout;
+    /// # use core::mem;
+    /// # let mut storage = ContiguousMemory::new();
+    /// let value = vec!["ignore", "drop", "for", "me"];
+    /// let erased = &value as *const Vec<&str> as *const ();
+    /// let layout = Layout::new::<Vec<&str>>();
+    ///
+    /// // Reference type arguments must be fully specified.
+    /// let stored: CERef<Vec<&str>, DefaultMemoryManager> = unsafe {
+    ///     mem::transmute(storage.push_raw(erased, layout))
+    /// };
+    /// ```
     pub unsafe fn push_raw<T>(
         &mut self,
         data: *const T,
@@ -459,7 +616,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
                     }
                     break taken;
                 }
-                Err(ContiguousMemoryError::NoStorageLeft) => match base {
+                Err(AllocationTrackerError::NoFreeMemory) => match base {
                     Some(prev_base) => {
                         let curr_capacity = self.get_capacity();
 
@@ -482,7 +639,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
                                 .alloc
                                 .grow(Some(prev_base), old_layout, new_layout)
                         }
-                        .expect("unable to allocate required memory");
+                        .expect("unable to allocate more memory");
                         self.inner.base.set(new_base);
                         self.inner.capacity.set(new_capacity);
                     }
@@ -522,6 +679,11 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// Variant of [`push_raw`](ContiguousMemory::push_raw) which returns a
     /// reference that doesn't mark the used memory segment as free when
     /// dropped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the collection needs to grow and new capacity exceeds
+    /// `isize::MAX` bytes or allocation of additional memory fails.
     pub unsafe fn push_raw_persisted<T>(
         &mut self,
         data: *const T,
@@ -536,13 +698,9 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// Assumes value is stored at the provided _relative_ `position` in
     /// managed memory and returns a pointer or a reference to it.
     ///
-    /// # Example
-    ///
-    /// TODO: Default assume_stored example
-    ///
     /// # Safety
     ///
-    /// This functions isn't unsafe because creating an invalid pointer isn't
+    /// This function isn't unsafe because creating an invalid pointer isn't
     /// considered unsafe. Responsibility for guaranteeing safety falls on
     /// code that's dereferencing the pointer.
     pub fn assume_stored<T>(&self, position: usize) -> ContiguousEntryRef<T, A> {
@@ -571,7 +729,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
         A: Clone,
     {
         let current_layout = self.get_layout();
-        let result = Self::new_with_layout_and_alloc(current_layout, self.inner.alloc.clone());
+        let result = Self::with_layout_and_alloc(current_layout, self.inner.alloc.clone());
         match self.get_base() {
             Some(base) => unsafe {
                 core::ptr::copy_nonoverlapping(
@@ -595,10 +753,6 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// [`ContiguousMemory::push_persisted`] and
     /// [`ContiguousMemory::push_raw_persisted`] methods.
     ///
-    /// See also:
-    /// - [`ContiguousMemory::clear_region`] - for freeing a specific
-    ///   container region
-    ///
     /// # Safety
     ///
     /// This method is unsafe because it doesn't invalidate any previously
@@ -616,14 +770,10 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// [`ContiguousMemory::push_persisted`] and
     /// [`ContiguousMemory::push_raw_persisted`] methods.
     ///
-    /// See also:
-    /// - [`ContiguousMemory::clear`] - for freeing the entire container
+    /// # Panics
     ///
-    /// # Errors
-    ///
-    /// This function returns a [`ContiguousMemoryError::NotContained`] error if
-    /// the provided region falls outside of the memory tracked by the
-    /// allocation tracker.
+    /// This function panics in debug mode if the provided region falls outside
+    /// of the memory tracked by the allocation tracker.
     ///
     /// # Safety
     ///
@@ -631,8 +781,12 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// returned references overlapping `region`. Storing data into the
     /// container and then trying to access previously stored data from
     /// overlapping regions will cause undefined behavior.
-    pub unsafe fn clear_region(&mut self, region: ByteRange) -> Result<(), ContiguousMemoryError> {
-        self.inner.tracker.borrow_mut().release(region)
+    pub unsafe fn clear_region(&mut self, region: ByteRange) {
+        #[allow(unused_variables)]
+        let result = self.inner.tracker.borrow_mut().release(region);
+
+        #[cfg(debug_assertions)]
+        result.expect("cleared region falls outside of the tracked memory");
     }
 
     /// Forgets this container without dropping it and returns its base address
@@ -693,14 +847,8 @@ mod test {
     }
 
     #[test]
-    fn construct_contiguous_memory() {
-        let memory = ContiguousMemory::new_with_capacity(1024);
-        assert_eq!(memory.get_capacity(), 1024);
-    }
-
-    #[test]
     fn store_and_get() {
-        let mut memory = ContiguousMemory::new_with_capacity(1024);
+        let mut memory = ContiguousMemory::with_capacity(1024);
 
         let person_a = Person {
             name: "Jerry".to_string(),
@@ -732,8 +880,6 @@ mod test {
 
         let stored_ref_number = memory.push(value_number);
         let stored_ref_car_a = memory.push(car_a.clone());
-        let chk_num = &*stored_ref_number.get();
-        let chk_car = &*stored_ref_car_a.get();
         let stored_ref_string = memory.push(value_string.clone());
 
         let stored_ref_byte = memory.push(value_byte);
@@ -748,7 +894,7 @@ mod test {
 
     #[test]
     fn resize_manually() {
-        let mut memory = ContiguousMemory::new_with_capacity(512);
+        let mut memory = ContiguousMemory::with_capacity(512);
 
         let person_a = Person {
             name: "Larry".to_string(),
@@ -764,7 +910,6 @@ mod test {
 
         let stored_car = memory.push(car_a.clone());
 
-        assert!(memory.resize(32).is_err());
         memory.resize(1024).unwrap();
         assert_eq!(memory.get_capacity(), 1024);
 
@@ -778,9 +923,8 @@ mod test {
 
     #[test]
     fn resize_automatically() {
-        let mut memory = ContiguousMemory::new_with_layout(
-            Layout::from_size_align(12, align_of::<u64>()).unwrap(),
-        );
+        let mut memory =
+            ContiguousMemory::with_layout(Layout::from_size_align(12, align_of::<u64>()).unwrap());
 
         {
             let _a = memory.push(1u32);

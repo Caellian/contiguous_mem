@@ -3,7 +3,7 @@ use core::{
     ptr::NonNull,
 };
 
-use crate::{error::MemoryManagerError, tracker::AllocationTracker};
+use crate::{error::MemoryError, tracker::AllocationTracker};
 
 use super::*;
 
@@ -42,7 +42,7 @@ pub(crate) const unsafe fn null_base(align: usize) -> BasePtr {
 pub trait MemoryManager {
     /// Allocates a block of memory with size and alignment specified by
     /// `layout` argument.
-    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryManagerError>;
+    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError>;
 
     /// Deallocates a block of memory of provided `layout` at the specified
     /// `address`.
@@ -58,7 +58,7 @@ pub trait MemoryManager {
         address: BaseAddress,
         old_layout: Layout,
         new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryManagerError>;
+    ) -> Result<BaseAddress, MemoryError>;
 
     /// Grows the container underlying memory from `old_layout` size to
     /// `new_layout`.
@@ -67,7 +67,7 @@ pub trait MemoryManager {
         address: BaseAddress,
         old_layout: Layout,
         new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryManagerError>;
+    ) -> Result<BaseAddress, MemoryError>;
 }
 
 /// Default [memory manager](MemoryManager) that uses the methods exposed by
@@ -75,7 +75,7 @@ pub trait MemoryManager {
 #[derive(Clone, Copy)]
 pub struct DefaultMemoryManager;
 impl MemoryManager for DefaultMemoryManager {
-    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryManagerError> {
+    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
         if layout.size() == 0 {
             Ok(None)
         } else {
@@ -100,7 +100,7 @@ impl MemoryManager for DefaultMemoryManager {
         address: BaseAddress,
         old_layout: Layout,
         new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryManagerError> {
+    ) -> Result<BaseAddress, MemoryError> {
         match address {
             Some(it) => Ok(if new_layout.size() > 0 {
                 Some(NonNull::from(core::slice::from_raw_parts(
@@ -120,7 +120,7 @@ impl MemoryManager for DefaultMemoryManager {
         address: BaseAddress,
         old_layout: Layout,
         new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryManagerError> {
+    ) -> Result<BaseAddress, MemoryError> {
         match address {
             Some(it) => Ok(Some(NonNull::from(core::slice::from_raw_parts(
                 alloc::realloc(it.as_ptr() as *mut u8, old_layout, new_layout.size()),
@@ -142,13 +142,13 @@ impl MemoryManager for DefaultMemoryManager {
 
 #[cfg(feature = "allocator_api")]
 impl<A: Allocator> MemoryManager for A {
-    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryManagerError> {
+    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
         if layout.size() == 0 {
             Ok(None)
         } else {
             Allocator::allocate(self, layout)
                 .map(|it| Some(it))
-                .map_err(MemoryManagerError::from)
+                .map_err(MemoryError::from)
         }
     }
 
@@ -166,7 +166,7 @@ impl<A: Allocator> MemoryManager for A {
         address: BaseAddress,
         old_layout: Layout,
         new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryManagerError> {
+    ) -> Result<BaseAddress, MemoryError> {
         match address {
             Some(it) => {
                 if new_layout.size() > 0 {
@@ -177,7 +177,7 @@ impl<A: Allocator> MemoryManager for A {
                         new_layout,
                     )
                     .map(|it| Some(it))
-                    .map_err(MemoryManagerError::from)
+                    .map_err(MemoryError::from)
                 } else {
                     Allocator::deallocate(
                         self,
@@ -196,7 +196,7 @@ impl<A: Allocator> MemoryManager for A {
         address: BaseAddress,
         old_layout: Layout,
         new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryManagerError> {
+    ) -> Result<BaseAddress, MemoryError> {
         match address {
             Some(it) => Allocator::grow(
                 self,
@@ -205,14 +205,14 @@ impl<A: Allocator> MemoryManager for A {
                 new_layout,
             )
             .map(|it| Some(it))
-            .map_err(MemoryManagerError::from),
+            .map_err(MemoryError::from),
             None => {
                 if new_layout.size() == 0 {
                     Ok(None)
                 } else {
                     Allocator::allocate(self, new_layout)
                         .map(|it| Some(it))
-                        .map_err(MemoryManagerError::from)
+                        .map_err(MemoryError::from)
                 }
             }
         }
@@ -238,7 +238,7 @@ impl<Impl: StorageDetails<A>, A: MemoryManager> MemoryState<Impl, A> {
 }
 
 impl MemoryState<ImplDefault, DefaultMemoryManager> {
-    pub fn new(layout: Layout) -> Result<Rc<Self>, MemoryManagerError> {
+    pub fn new(layout: Layout) -> Result<Rc<Self>, MemoryError> {
         let base = DefaultMemoryManager.allocate(layout)?;
         Ok(Rc::new(MemoryState {
             base: BaseLocation(Cell::new(base)),
@@ -251,7 +251,7 @@ impl MemoryState<ImplDefault, DefaultMemoryManager> {
 }
 
 impl<A: MemoryManager> MemoryState<ImplDefault, A> {
-    pub fn new_with_alloc(layout: Layout, alloc: A) -> Result<Rc<Self>, MemoryManagerError> {
+    pub fn new_with_alloc(layout: Layout, alloc: A) -> Result<Rc<Self>, MemoryError> {
         let base = alloc.allocate(layout)?;
         Ok(Rc::new(MemoryState {
             base: BaseLocation(Cell::new(base)),
@@ -263,9 +263,9 @@ impl<A: MemoryManager> MemoryState<ImplDefault, A> {
     }
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 impl MemoryState<ImplConcurrent, DefaultMemoryManager> {
-    pub fn new_sync(layout: Layout) -> Result<Arc<Self>, MemoryManagerError> {
+    pub fn new_sync(layout: Layout) -> Result<Arc<Self>, MemoryError> {
         let base = DefaultMemoryManager.allocate(layout)?;
         Ok(Arc::new(MemoryState {
             base: BaseLocation(RwLock::new(base)),
@@ -278,7 +278,7 @@ impl MemoryState<ImplConcurrent, DefaultMemoryManager> {
 }
 
 impl<A: MemoryManager> MemoryState<ImplConcurrent, A> {
-    pub fn new_sync_with_alloc(layout: Layout, alloc: A) -> Result<Arc<Self>, MemoryManagerError> {
+    pub fn new_sync_with_alloc(layout: Layout, alloc: A) -> Result<Arc<Self>, MemoryError> {
         let base = alloc.allocate(layout)?;
         Ok(Arc::new(MemoryState {
             base: BaseLocation(RwLock::new(base)),
@@ -290,9 +290,9 @@ impl<A: MemoryManager> MemoryState<ImplConcurrent, A> {
     }
 }
 
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 impl MemoryState<ImplUnsafe, DefaultMemoryManager> {
-    pub fn new_unsafe(layout: Layout) -> Result<Self, MemoryManagerError> {
+    pub fn new_unsafe(layout: Layout) -> Result<Self, MemoryError> {
         let base = DefaultMemoryManager.allocate(layout)?;
         Ok(MemoryState {
             base: BaseLocation(base),
@@ -304,9 +304,9 @@ impl MemoryState<ImplUnsafe, DefaultMemoryManager> {
     }
 }
 
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 impl<A: MemoryManager> MemoryState<ImplUnsafe, A> {
-    pub fn new_unsafe_with_alloc(layout: Layout, alloc: A) -> Result<Self, MemoryManagerError> {
+    pub fn new_unsafe_with_alloc(layout: Layout, alloc: A) -> Result<Self, MemoryError> {
         let base = alloc.allocate(layout)?;
         Ok(MemoryState {
             base: BaseLocation(base),
@@ -318,7 +318,7 @@ impl<A: MemoryManager> MemoryState<ImplUnsafe, A> {
     }
 }
 
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 impl<A: MemoryManager + Clone> Clone for MemoryState<ImplUnsafe, A> {
     fn clone(&self) -> Self {
         Self {
@@ -380,14 +380,14 @@ impl<Impl: ImplDetails<A>, A: MemoryManager> Deref for BaseLocation<Impl, A> {
     }
 }
 
-#[cfg(feature = "unsafe")]
+#[cfg(feature = "unsafe_impl")]
 impl<A: MemoryManager + Clone> Copy for BaseLocation<ImplUnsafe, A> {}
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 unsafe impl<Impl: ImplDetails<A>, A: MemoryManager> Send for BaseLocation<Impl, A> where
     Impl: PartialEq<ImplConcurrent>
 {
 }
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 unsafe impl<Impl: ImplDetails<A>, A: MemoryManager> Sync for BaseLocation<Impl, A> where
     Impl: PartialEq<ImplConcurrent>
 {

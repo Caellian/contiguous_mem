@@ -8,14 +8,14 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 use crate::common::ImplConcurrent;
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 use crate::error::{LockTarget, LockingError};
 
 use crate::{
     common::{ImplDefault, ImplDetails, StorageDetails},
-    error::RegionBorrowedError,
+    error::RegionBorrowError,
     range::ByteRange,
     raw::MemoryManager,
     types::*,
@@ -23,7 +23,7 @@ use crate::{
 
 /// A synchronized (thread-safe) reference to `T` data stored in a
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemory) structure.
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 pub struct SyncContiguousEntryRef<T: ?Sized, A: MemoryManager> {
     pub(crate) inner: Arc<ReferenceState<T, ImplConcurrent, A>>,
     #[cfg(feature = "ptr_metadata")]
@@ -33,10 +33,10 @@ pub struct SyncContiguousEntryRef<T: ?Sized, A: MemoryManager> {
 }
 
 /// A shorter type name for [`SyncContiguousEntryRef`].
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 pub type SCERef<T, A> = SyncContiguousEntryRef<T, A>;
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 impl<T: ?Sized, A: MemoryManager> SyncContiguousEntryRef<T, A> {
     /// Returns a byte range within container memory this reference points to.
     pub fn range(&self) -> ByteRange {
@@ -297,7 +297,7 @@ impl<T: ?Sized, A: MemoryManager> SyncContiguousEntryRef<T, A> {
     }
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 impl<T: ?Sized, A: MemoryManager> Clone for SyncContiguousEntryRef<T, A> {
     fn clone(&self) -> Self {
         SyncContiguousEntryRef {
@@ -348,9 +348,9 @@ impl<T: ?Sized, A: MemoryManager> ContiguousEntryRef<T, A> {
     }
 
     /// Returns a reference to data at its current location or a
-    /// [`RegionBorrowedError`] error if the represented memory region is
+    /// [`RegionBorrowError`] error if the represented memory region is
     /// mutably borrowed.
-    pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplDefault, A>, RegionBorrowedError>
+    pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, ImplDefault, A>, RegionBorrowError>
     where
         T: RefSizeReq,
     {
@@ -358,7 +358,7 @@ impl<T: ?Sized, A: MemoryManager> ContiguousEntryRef<T, A> {
         if let BorrowState::Read(count) = state {
             self.inner.borrow_kind.set(BorrowState::Read(count + 1));
         } else {
-            return Err(RegionBorrowedError {
+            return Err(RegionBorrowError {
                 range: self.inner.range,
             });
         }
@@ -369,7 +369,7 @@ impl<T: ?Sized, A: MemoryManager> ContiguousEntryRef<T, A> {
 
             Ok(MemoryReadGuard {
                 state: self.inner.clone(),
-                #[cfg(feature = "sync")]
+                #[cfg(feature = "sync_impl")]
                 guard: (),
                 #[cfg(not(feature = "ptr_metadata"))]
                 value: &*(pos as *mut T),
@@ -389,16 +389,16 @@ impl<T: ?Sized, A: MemoryManager> ContiguousEntryRef<T, A> {
     }
 
     /// Returns a mutable reference to data at its current location or a
-    /// [`RegionBorrowedError`] error if the represented memory region is
+    /// [`RegionBorrowError`] error if the represented memory region is
     /// already borrowed.
     pub fn try_get_mut(
         &mut self,
-    ) -> Result<MemoryWriteGuard<'_, T, ImplDefault, A>, RegionBorrowedError>
+    ) -> Result<MemoryWriteGuard<'_, T, ImplDefault, A>, RegionBorrowError>
     where
         T: RefSizeReq,
     {
         if self.inner.borrow_kind.get() != BorrowState::Read(0) {
-            return Err(RegionBorrowedError {
+            return Err(RegionBorrowError {
                 range: self.inner.range,
             });
         } else {
@@ -411,7 +411,7 @@ impl<T: ?Sized, A: MemoryManager> ContiguousEntryRef<T, A> {
 
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
-                #[cfg(feature = "sync")]
+                #[cfg(feature = "sync_impl")]
                 guard: (),
                 #[cfg(not(feature = "ptr_metadata"))]
                 value: &mut *(pos as *mut T),
@@ -637,7 +637,7 @@ use sealed::*;
 pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> {
     state: Impl::RefState<T>,
     #[allow(unused)]
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "sync_impl")]
     guard: Impl::WriteGuard<'a>,
     value: &'a mut T,
 }
@@ -674,7 +674,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Drop
 pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> {
     state: Impl::RefState<T>,
     #[allow(unused)]
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "sync_impl")]
     guard: Impl::ReadGuard<'a>,
     value: &'a T,
 }

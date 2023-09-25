@@ -6,7 +6,7 @@ struct Data {
 }
 
 fn main() {
-    let storage = SyncContiguousMemory::new_with_capacity(4096);
+    let storage = SyncContiguousMemory::with_capacity(4096);
 
     let mut sent_storage = storage.clone();
     let writer_one =

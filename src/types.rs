@@ -3,10 +3,10 @@
 #[cfg(not(feature = "no_std"))]
 mod std_imports {
     pub use std::rc::Rc;
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "sync_impl")]
     pub use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "sync_impl")]
     pub use std::sync::atomic::{AtomicUsize, Ordering};
 }
 
@@ -16,12 +16,12 @@ pub use std_imports::*;
 #[cfg(feature = "no_std")]
 mod nostd_imports {
     pub use ::alloc::rc::Rc;
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "sync_impl")]
     pub use ::alloc::sync::Arc;
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "sync_impl")]
     pub use spin::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "sync_impl")]
     pub use portable_atomic::{AtomicUsize, Ordering};
 
     pub use ::alloc::vec;
@@ -30,7 +30,7 @@ mod nostd_imports {
 #[cfg(feature = "no_std")]
 pub use nostd_imports::*;
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 use crate::error::{LockTarget, LockingError};
 
 /// Trait that adds a method which mimics std `Result::map_err` on a Lock in
@@ -38,7 +38,7 @@ use crate::error::{LockTarget, LockingError};
 ///
 /// This is necessary as [spin::Mutex::lock] doesn't return a Result but a
 /// [MutexGuard] directly.
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 pub(crate) trait MutexTypesafe<T: ?Sized> {
     fn lock_named(&self, target: LockTarget) -> Result<MutexGuard<T>, crate::error::LockingError>;
     fn try_lock_named(
@@ -46,7 +46,7 @@ pub(crate) trait MutexTypesafe<T: ?Sized> {
         target: LockTarget,
     ) -> Result<MutexGuard<T>, crate::error::LockingError>;
 }
-#[cfg(all(feature = "sync", not(feature = "no_std")))]
+#[cfg(all(feature = "sync_impl", not(feature = "no_std")))]
 impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
     fn lock_named(&self, target: LockTarget) -> Result<MutexGuard<T>, crate::error::LockingError> {
         match self.lock() {
@@ -65,7 +65,7 @@ impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
         }
     }
 }
-#[cfg(all(feature = "sync", feature = "no_std"))]
+#[cfg(all(feature = "sync_impl", feature = "no_std"))]
 impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
     fn lock_named(&self, _target: LockTarget) -> Result<MutexGuard<T>, LockingError> {
         Ok(self.lock())
@@ -81,14 +81,14 @@ impl<T: ?Sized> MutexTypesafe<T> for Mutex<T> {
     }
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "sync_impl")]
 pub(crate) trait RwLockTypesafe<T: ?Sized> {
     fn read_named(&self, target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError>;
     fn try_read_named(&self, target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError>;
     fn write_named(&self, target: LockTarget) -> Result<RwLockWriteGuard<T>, LockingError>;
     fn try_write_named(&self, target: LockTarget) -> Result<RwLockWriteGuard<T>, LockingError>;
 }
-#[cfg(all(feature = "sync", not(feature = "no_std")))]
+#[cfg(all(feature = "sync_impl", not(feature = "no_std")))]
 impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     fn read_named(&self, target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError> {
         match self.read() {
@@ -120,7 +120,7 @@ impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
         }
     }
 }
-#[cfg(all(feature = "sync", feature = "no_std"))]
+#[cfg(all(feature = "sync_impl", feature = "no_std"))]
 impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
     fn read_named(&self, _target: LockTarget) -> Result<RwLockReadGuard<T>, LockingError> {
         Ok(self.read())
