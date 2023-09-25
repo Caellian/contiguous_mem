@@ -18,7 +18,7 @@ required-features = ["ptr_metadata"]
 spin = { version = "0.9", optional = true }
 
 [features]
-default = ["sync_impl", "unsafe_impl", "debug"]
+default = ["sync_impl", "unsafe_impl", "allocator_api"]
 
 no_std = ["dep:spin"]
 debug = []

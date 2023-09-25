@@ -57,6 +57,10 @@ pub trait ManageMemory {
 
     /// Deallocates a block of memory of provided `layout` at the specified
     /// `address`.
+    ///
+    /// # Safety
+    ///
+    /// See: [alloc::Allocator::deallocate]
     unsafe fn deallocate(&self, address: BaseAddress, layout: Layout);
 
     /// Shrinks the container underlying memory from `old_layout` size to
@@ -64,6 +68,10 @@ pub trait ManageMemory {
     ///
     /// Generally doesn't cause a move, but an implementation can choose to do
     /// so.
+    ///
+    /// # Safety
+    ///
+    /// See: [alloc::Allocator::shrink]
     unsafe fn shrink(
         &self,
         address: BaseAddress,
@@ -73,6 +81,10 @@ pub trait ManageMemory {
 
     /// Grows the container underlying memory from `old_layout` size to
     /// `new_layout`.
+    ///
+    /// # Safety
+    ///
+    /// See: [alloc::Allocator::grow]
     unsafe fn grow(
         &self,
         address: BaseAddress,
@@ -157,17 +169,18 @@ impl<A: Allocator> ManageMemory for A {
             Ok(None)
         } else {
             Allocator::allocate(self, layout)
-                .map(|it| Some(it))
+                .map(Some)
                 .map_err(MemoryError::from)
         }
     }
 
     unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
-        match address {
-            Some(it) => {
-                Allocator::deallocate(self, NonNull::new_unchecked(it.as_ptr() as *mut u8), layout)
-            }
-            None => {}
+        if let Some(allocated) = address {
+            Allocator::deallocate(
+                self,
+                NonNull::new_unchecked(allocated.as_ptr() as *mut u8),
+                layout,
+            )
         }
     }
 
@@ -186,7 +199,7 @@ impl<A: Allocator> ManageMemory for A {
                         old_layout,
                         new_layout,
                     )
-                    .map(|it| Some(it))
+                    .map(Some)
                     .map_err(MemoryError::from)
                 } else {
                     Allocator::deallocate(
@@ -214,14 +227,14 @@ impl<A: Allocator> ManageMemory for A {
                 old_layout,
                 new_layout,
             )
-            .map(|it| Some(it))
+            .map(Some)
             .map_err(MemoryError::from),
             None => {
                 if new_layout.size() == 0 {
                     Ok(None)
                 } else {
                     Allocator::allocate(self, new_layout)
-                        .map(|it| Some(it))
+                        .map(Some)
                         .map_err(MemoryError::from)
                 }
             }

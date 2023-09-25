@@ -102,7 +102,7 @@ impl<A: ManageMemory> ImplDetails<A> for ImplConcurrent {
     fn get_layout(base: &Self::Base, align: usize) -> Layout {
         unsafe {
             base_addr_layout(
-                <Self as ImplDetails<A>>::get_base(base).unwrap_or_else(|_| None),
+                <Self as ImplDetails<A>>::get_base(base).unwrap_or(None),
                 align,
             )
         }

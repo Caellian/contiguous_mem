@@ -890,6 +890,10 @@ impl<A: ManageMemory> ContiguousMemory<A> {
     ///
     /// Panics if the collection needs to grow and new capacity exceeds
     /// `isize::MAX` bytes or allocation of additional memory fails.
+    /// 
+    /// # Safety
+    /// 
+    /// See: [`ContiguousMemory::push_raw`]
     pub unsafe fn push_raw_persisted<T>(
         &mut self,
         data: *const T,
