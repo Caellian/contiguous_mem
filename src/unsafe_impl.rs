@@ -487,7 +487,7 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     /// # Examples
     /// ```rust
     /// # use contiguous_mem::UnsafeContiguousMemory;
-    /// let mut storage = UnsafeContiguousMemory::new_with_capacity(128);
+    /// let mut storage = UnsafeContiguousMemory::with_capacity(128);
     /// let initial_position = storage.push(278u32).unwrap();
     ///
     /// let base_addr = storage.get_base().unwrap().as_ptr() as *const u8;

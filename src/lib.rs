@@ -88,6 +88,8 @@ impl ContiguousMemory {
     /// # Examples
     /// ```rust
     /// # #![allow(unused_mut)]
+    /// use contiguous_mem::*;
+    ///
     /// let mut storage = ContiguousMemory::new();
     /// ```
     pub fn new() -> Self {
@@ -110,6 +112,8 @@ impl ContiguousMemory {
     /// # Examples
     /// ```rust
     /// # #![allow(unused_mut)]
+    /// use contiguous_mem::*;
+    ///
     /// let mut storage = ContiguousMemory::with_capacity(1024);
     /// # assert_eq!(storage.get_capacity(), 1024);
     /// # assert_eq!(storage.get_align(), core::mem::align_of::<usize>());
@@ -138,12 +142,13 @@ impl ContiguousMemory {
     /// ```rust
     /// # #![allow(unused_mut)]
     /// # use core::mem::align_of;
+    /// use contiguous_mem::*;
     /// use core::alloc::Layout;
     ///
     /// let mut storage = ContiguousMemory::with_layout(
     ///     Layout::from_size_align(512, align_of::<u32>()).unwrap()
     /// );
-    /// # assert_eq!(storage.get_capacity(), 1024);
+    /// # assert_eq!(storage.get_capacity(), 512);
     /// # assert_eq!(storage.get_align(), align_of::<u32>());
     /// ```
     pub fn with_layout(layout: Layout) -> Self {
@@ -164,6 +169,8 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// ```rust
     /// # #![allow(unused_mut)]
     /// # use core::mem::align_of;
+    /// use contiguous_mem::*;
+    ///
     /// let mut storage = ContiguousMemory::with_alloc(
     ///     DefaultMemoryManager
     /// );
@@ -189,6 +196,8 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// ```rust
     /// # #![allow(unused_mut)]
     /// # use core::mem::align_of;
+    /// use contiguous_mem::*;
+    ///
     /// let mut storage = ContiguousMemory::with_capacity_and_alloc(
     ///     256,
     ///     DefaultMemoryManager
@@ -223,6 +232,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// # #![allow(unused_mut)]
     /// # use core::mem::align_of;
     /// use core::alloc::Layout;
+    /// use contiguous_mem::*;
     ///
     /// let mut storage = ContiguousMemory::with_layout_and_alloc(
     ///     Layout::from_size_align(0, align_of::<u32>()).unwrap(),
@@ -241,6 +251,19 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     }
 
     /// Returns the base address of the allocated memory.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use contiguous_mem::*;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    ///
+    /// assert_eq!(s.get_base(), None);
+    ///
+    /// let value = s.push(6);
+    ///
+    /// assert_eq!(s.get_base().is_some(), true);
+    /// ```
     #[inline]
     pub fn get_base(&self) -> BaseAddress {
         self.inner.base.get()
@@ -935,7 +958,7 @@ mod test {
             assert_eq!(memory.get_capacity(), 24);
         }
 
-        memory.resize(5).expect("can't shrink empty storage");
+        memory.try_resize(5).expect("can't shrink empty storage");
         {
             memory.push_persisted(1u16);
             memory.push_persisted(2u16);

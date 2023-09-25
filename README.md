@@ -63,9 +63,9 @@ contiguous_mem = { version = "0.4", features = ["no_std"] }
   environment
 - [`allocator_api`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/allocator-api.html)
   &lt;_nightly_&gt; - enables automatic support for custom allocators
-- `sync` (default) - enables `SyncContiguousMemory` and related error code
+- `sync_impl` (default) - enables `SyncContiguousMemory` and related error code
   implementation
-- `unsafe` (default) - enables `UnsafeContiguousMemory`
+- `unsafe_impl` (default) - enables `UnsafeContiguousMemory`
 
 ### Usage
 

@@ -83,7 +83,9 @@ impl ByteRange {
     /// Returns `true` if `other` byte range overlaps this byte range.
     #[inline]
     pub fn overlaps(&self, other: Self) -> bool {
-        self.0 <= other.0 && other.0 < self.1 || self.0 <= other.1 && other.1 < self.1
+        self.contains(other)
+            || (other.0 <= self.0 && other.1 > self.0)
+            || (other.0 < self.1 && other.1 > self.1)
     }
 
     /// Returns two byte ranges that remain when another `other` range is
