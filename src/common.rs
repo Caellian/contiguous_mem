@@ -289,7 +289,7 @@ impl<A: ManageMemory> ReferenceDetails<A> for ImplConcurrent {
         range: ByteRange,
     ) -> Option<*mut ()> {
         if let Ok(mut lock) = tracker {
-            let _ = lock.release(range);
+            lock.release(range);
 
             if let Ok(base) = base {
                 range.offset_base(base)
@@ -313,7 +313,7 @@ impl<A: ManageMemory> ReferenceDetails<A> for ImplDefault {
         base: Self::LockResult<BaseAddress>,
         range: ByteRange,
     ) -> Option<*mut ()> {
-        let _ = tracker.release(range);
+        tracker.release(range);
         range.offset_base(base)
     }
 
@@ -338,7 +338,7 @@ impl<A: ManageMemory> ReferenceDetails<A> for ImplUnsafe {
         base: Self::LockResult<BaseAddress>,
         range: ByteRange,
     ) -> Option<*mut ()> {
-        let _ = tracker.release(range);
+        tracker.release(range);
         range.offset_base(base)
     }
 }

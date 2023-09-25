@@ -216,7 +216,7 @@ impl AllocationTracker {
     ///   `AllocationTracker`, or
     /// - the provided region is in part or whole already marked as free.
     pub fn release(&mut self, region: ByteRange) {
-        if region.len() == 0 {
+        if region.is_empty() {
             return;
         }
         #[cfg(debug_assertions)]

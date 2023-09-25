@@ -153,8 +153,11 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
     /// allocated for storing data. It may be larger than the amount of data
     /// currently stored within the container.
     #[inline]
-    pub fn capacity(&self) -> usize {
-        self.inner.capacity.load(Ordering::Acquire)
+    pub fn capacity(&self) -> Result<usize, LockingError> {
+        Ok(match self.base()? {
+            Some(it) => unsafe { it.as_ref().len() },
+            None => 0,
+        })
     }
 
     /// Returns the total size of all stored entries excluding the padding or a
@@ -166,7 +169,7 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
             .tracker
             .lock_named(LockTarget::AllocationTracker)?
             .count_free();
-        Ok(self.capacity() - free_bytes)
+        Ok(self.capacity()? - free_bytes)
     }
 
     /// Returns the alignment of the memory container.
@@ -177,14 +180,11 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
 
     /// Returns the layout of the memory region containing stored data.
     #[inline]
-    pub fn layout(&self) -> Layout {
-        unsafe {
+    pub fn layout(&self) -> Result<Layout, LockingError> {
+        Ok(unsafe {
             // SAFETY: Constructor would panic if Layout was invalid.
-            Layout::from_size_align_unchecked(
-                self.inner.capacity.load(Ordering::Acquire),
-                self.inner.alignment,
-            )
-        }
+            base_addr_layout(self.base()?, self.align())
+        })
     }
 
     /// Returns `true` if provided generic type `T` can be stored without
@@ -236,7 +236,7 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
                 panic!("new capacity exceeds `isize::MAX`")
             }
             Err(SyncMemoryError::Memory(MemoryError::Allocator(_))) => panic!("allocator error"),
-            Err(SyncMemoryError::Lock(err)) => return Err(err),
+            Err(SyncMemoryError::Lock(err)) => Err(err),
         }
     }
 
@@ -249,7 +249,9 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
     /// If the base address of the memory block stays the same the returned
     /// value is `None`.
     pub fn try_grow_to(&mut self, new_capacity: usize) -> Result<Option<BasePtr>, SyncMemoryError> {
-        let old_capacity = self.capacity();
+        let mut base = self.inner.base.write_named(LockTarget::BaseAddress)?;
+
+        let old_capacity = base_addr_capacity(*base);
         let new_capacity = core::cmp::max(old_capacity, new_capacity);
         if new_capacity == old_capacity {
             return Ok(None);
@@ -259,18 +261,15 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
             .inner
             .tracker
             .lock_named(LockTarget::AllocationTracker)?;
-        let mut base = self.inner.base.write_named(LockTarget::BaseAddress)?;
 
         tracker.grow(new_capacity);
 
-        let old_layout = self.layout();
+        let old_layout = unsafe { base_addr_layout(*base, self.inner.alignment) };
         let new_layout =
             Layout::from_size_align(new_capacity, old_layout.align()).map_err(MemoryError::from)?;
 
         let prev_base = *base;
         *base = unsafe { self.inner.alloc.grow(*base, old_layout, new_layout)? };
-
-        self.inner.capacity.store(new_capacity, Ordering::Release);
 
         Ok(if *base != prev_base {
             Some(unsafe {
@@ -306,7 +305,7 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
             Err(SyncMemoryError::Memory(MemoryError::Allocator(_))) => {
                 panic!("unable to allocate more memory")
             }
-            Err(SyncMemoryError::Lock(err)) => return Err(err),
+            Err(SyncMemoryError::Lock(err)) => Err(err),
         }
     }
 
@@ -321,22 +320,22 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
             return Ok(None);
         }
 
-        let old_capacity = self.capacity();
+        let mut base = self.inner.base.write_named(LockTarget::BaseAddress)?;
+
+        let old_capacity = base_addr_capacity(*base);
         let new_capacity = old_capacity.saturating_add(additional);
 
         let mut tracker = self
             .inner
             .tracker
             .lock_named(LockTarget::AllocationTracker)?;
-        let mut base = self.inner.base.write_named(LockTarget::BaseAddress)?;
 
-        let old_layout = self.layout();
+        let old_layout = unsafe { base_addr_layout(*base, self.inner.alignment) };
         let new_layout = Layout::from_size_align(new_capacity, old_layout.align())
             .expect("new capacity exceeds `isize::MAX`");
         let prev_base = *base;
         *base = unsafe { self.inner.alloc.grow(*base, old_layout, new_layout) }
             .expect("unable to allocate required memory");
-        self.inner.capacity.store(new_capacity, Ordering::Release);
 
         tracker.grow(new_capacity);
 
@@ -375,7 +374,7 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
             Err(SyncMemoryError::Memory(MemoryError::Allocator(_))) => {
                 panic!("unable to allocate more memory")
             }
-            Err(SyncMemoryError::Lock(err)) => return Err(err),
+            Err(SyncMemoryError::Lock(err)) => Err(err),
         }
     }
 
@@ -409,12 +408,11 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
                 let align_offset = last.align_offset(layout.align());
                 let new_capacity = old_capacity.saturating_add(align_offset + layout.size());
 
-                let old_layout = self.layout();
+                let old_layout = unsafe { base_addr_layout(*base, self.inner.alignment) };
                 let new_layout = Layout::from_size_align(new_capacity, old_layout.align())
                     .map_err(MemoryError::from)?;
                 *base = unsafe { self.inner.alloc.grow(*base, old_layout, new_layout) }
                     .map_err(MemoryError::from)?;
-                self.inner.capacity.store(new_capacity, Ordering::Release);
 
                 tracker.grow(new_capacity);
 
@@ -433,9 +431,8 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
                 .map_err(MemoryError::from)?;
 
                 let new_base = unsafe { self.inner.alloc.allocate(new_layout)?.unwrap_unchecked() };
-
                 *base = Some(new_base);
-                self.inner.capacity.store(layout.size(), Ordering::Release);
+
                 Ok(Some(new_base))
             }
         }
@@ -453,24 +450,25 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
             .tracker
             .lock_named(LockTarget::AllocationTracker)?;
         let new_capacity = core::cmp::max(tracker.min_len(), new_capacity);
-
         let mut base = self.inner.base.write_named(LockTarget::BaseAddress)?;
-        let old_layout = self.layout();
+
+        let old_layout = unsafe { base_addr_layout(*base, self.inner.alignment) };
         if new_capacity == old_layout.size() {
             return Ok(*base);
         }
-        tracker.shrink(new_capacity);
-
         let new_layout = unsafe {
             // SAFETY: Previous layout was valid and had valid alignment,
             // new one is smaller with same alignment so it must be
             // valid as well.
             Layout::from_size_align_unchecked(new_capacity, old_layout.align())
         };
-        let new_base = unsafe { self.inner.alloc.shrink(*base, self.layout(), new_layout) }
+
+        let new_base = unsafe { self.inner.alloc.shrink(*base, old_layout, new_layout) }
             .expect("unable to shrink the container");
         *base = new_base;
-        self.inner.capacity.store(new_capacity, Ordering::Release);
+
+        tracker.shrink(new_capacity);
+
         Ok(new_base)
     }
 
@@ -493,7 +491,7 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
 
         let mut base = self.inner.base.write_named(LockTarget::BaseAddress)?;
 
-        let old_layout = self.layout();
+        let old_layout = unsafe { base_addr_layout(*base, self.inner.alignment) };
         let new_layout = unsafe {
             // SAFETY: Previous layout was valid and had valid alignment,
             // new one is smaller with same alignment so it must be
@@ -501,9 +499,8 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
             Layout::from_size_align_unchecked(new_capacity, old_layout.align())
         };
 
-        *base = unsafe { self.inner.alloc.shrink(*base, self.layout(), new_layout) }
+        *base = unsafe { self.inner.alloc.shrink(*base, old_layout, new_layout) }
             .expect("unable to shrink allocated memory");
-        self.inner.capacity.store(new_capacity, Ordering::Release);
 
         Ok(*base)
     }
@@ -589,7 +586,7 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
             let base = self.base()?;
             match tracker.take_next(base, layout) {
                 Ok(taken) => {
-                    let found = taken.offset_base_unwrap(base) as *mut u8;
+                    let found = taken.offset_base_unwrap(base);
                     unsafe { core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size()) }
                     break taken;
                 }
@@ -597,8 +594,8 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
                     let mut base_guard = self.inner.base.write_named(LockTarget::BaseAddress)?;
                     match base {
                         Some(prev_base) => {
-                            let curr_capacity = self.inner.capacity.load(Ordering::Acquire);
-
+                            // FIXME: self.capacity() will hang
+                            let curr_capacity = base_addr_capacity(*base_guard);
                             let start_free =
                                 (prev_base.as_ptr() as *const u8).add(tracker.last_offset());
                             let padding = start_free.align_offset(layout.align());
@@ -610,7 +607,8 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
 
                             tracker.grow(new_capacity);
 
-                            let old_layout = self.layout();
+                            let old_layout =
+                                unsafe { base_addr_layout(*base_guard, self.inner.alignment) };
                             let new_layout =
                                 Layout::from_size_align(new_capacity, old_layout.align())
                                     .expect("new capacity exceeds `isize::MAX`");
@@ -618,7 +616,6 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
                                 self.inner.alloc.grow(*base_guard, old_layout, new_layout)
                             }
                             .expect("unable to allocate required memory");
-                            self.inner.capacity.store(new_capacity, Ordering::Release);
                         }
                         None => {
                             tracker.grow(layout.size());
@@ -627,7 +624,6 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
                                 .alloc
                                 .allocate(layout)
                                 .expect("pushed element size exceeds `isize::MAX`");
-                            self.inner.capacity.store(layout.size(), Ordering::Release);
                         }
                     }
                 }
@@ -703,13 +699,13 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
     ///
     /// This function isn't unsafe, even though it ignores presence of `Copy`
     /// bound on stored data, because it doesn't create any invalid references.
-    #[must_use]
+    #[must_use = "unused copied collection"]
     pub fn copy_data(&self) -> Result<Self, LockingError>
     where
         A: Clone,
     {
         let base = self.inner.base.read_named(LockTarget::BaseAddress)?;
-        let current_layout = self.layout();
+        let current_layout = unsafe { base_addr_layout(*base, self.inner.alignment) };
         let result = Self::with_layout_and_alloc(current_layout, self.inner.alloc.clone());
         match *base {
             Some(base) => unsafe {
@@ -786,20 +782,32 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
     /// [default implementation](crate::ContiguousMemory::forget).
     pub fn forget(self) -> Result<(BaseAddress, Layout), LockingError> {
         let base = self.base()?;
-        let layout = self.layout();
+        let layout = unsafe { base_addr_layout(base, self.inner.alignment) };
         core::mem::forget(self);
         Ok((base, layout))
     }
 }
 
 #[cfg(feature = "debug")]
-impl core::fmt::Debug for SyncContiguousMemory
+impl<A: ManageMemory> core::fmt::Debug for SyncContiguousMemory<A>
 where
-    MemoryState<ImplConcurrent>: core::fmt::Debug,
+    MemoryState<ImplConcurrent, A>: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncContiguousMemory")
             .field("inner", &self.inner)
             .finish()
+    }
+}
+
+impl Default for SyncContiguousMemory {
+    fn default() -> Self {
+        SyncContiguousMemory::new()
+    }
+}
+
+impl<A: ManageMemory + Default> Default for SyncContiguousMemory<A> {
+    fn default() -> Self {
+        SyncContiguousMemory::with_alloc(A::default())
     }
 }

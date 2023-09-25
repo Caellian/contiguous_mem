@@ -7,9 +7,9 @@ use crate::{error::MemoryError, tracker::AllocationTracker};
 
 use super::*;
 
-#[cfg(all(feature = "no_std"))]
+#[cfg(feature = "no_std")]
 pub use alloc::alloc;
-#[cfg(all(not(feature = "no_std")))]
+#[cfg(not(feature = "no_std"))]
 use std::alloc;
 
 #[cfg(feature = "allocator_api")]
@@ -24,6 +24,17 @@ pub type BaseAddress = Option<BasePtr>;
 
 pub(crate) const unsafe fn null_base(align: usize) -> BasePtr {
     NonNull::new_unchecked(std::mem::transmute((align as *mut u8, 0usize)))
+}
+
+#[inline]
+pub(crate) fn base_addr_capacity(base: BaseAddress) -> usize {
+    base.map(|it| unsafe { it.as_ref().len() })
+        .unwrap_or_default()
+}
+
+#[inline]
+pub(crate) unsafe fn base_addr_layout(base: BaseAddress, align: usize) -> Layout {
+    Layout::from_size_align_unchecked(base_addr_capacity(base), align)
 }
 
 /// Memory manager controls allocation and deallocation of underlying memory
@@ -89,9 +100,8 @@ impl ManageMemory for DefaultMemoryManager {
     }
 
     unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
-        match address {
-            Some(it) => alloc::dealloc(it.as_ptr() as *mut u8, layout),
-            None => {}
+        if let Some(it) = address {
+            alloc::dealloc(it.as_ptr() as *mut u8, layout);
         }
     }
 
@@ -221,7 +231,6 @@ impl<A: Allocator> ManageMemory for A {
 
 pub struct MemoryState<Impl: StorageDetails<A>, A: ManageMemory> {
     pub base: BaseLocation<Impl, A>,
-    pub capacity: Impl::SizeType,
     pub alignment: usize,
     pub tracker: Impl::AllocationTracker,
     pub alloc: A,
@@ -242,7 +251,6 @@ impl MemoryState<ImplDefault, DefaultMemoryManager> {
         let base = DefaultMemoryManager.allocate(layout)?;
         Ok(Rc::new(MemoryState {
             base: BaseLocation(Cell::new(base)),
-            capacity: Cell::new(layout.size()),
             alignment: layout.align(),
             tracker: RefCell::new(AllocationTracker::new(layout.size())),
             alloc: DefaultMemoryManager,
@@ -255,7 +263,6 @@ impl<A: ManageMemory> MemoryState<ImplDefault, A> {
         let base = alloc.allocate(layout)?;
         Ok(Rc::new(MemoryState {
             base: BaseLocation(Cell::new(base)),
-            capacity: Cell::new(layout.size()),
             alignment: layout.align(),
             tracker: RefCell::new(AllocationTracker::new(layout.size())),
             alloc,
@@ -269,7 +276,6 @@ impl MemoryState<ImplConcurrent, DefaultMemoryManager> {
         let base = DefaultMemoryManager.allocate(layout)?;
         Ok(Arc::new(MemoryState {
             base: BaseLocation(RwLock::new(base)),
-            capacity: AtomicUsize::new(layout.size()),
             alignment: layout.align(),
             tracker: Mutex::new(AllocationTracker::new(layout.size())),
             alloc: DefaultMemoryManager,
@@ -282,7 +288,6 @@ impl<A: ManageMemory> MemoryState<ImplConcurrent, A> {
         let base = alloc.allocate(layout)?;
         Ok(Arc::new(MemoryState {
             base: BaseLocation(RwLock::new(base)),
-            capacity: AtomicUsize::new(layout.size()),
             alignment: layout.align(),
             tracker: Mutex::new(AllocationTracker::new(layout.size())),
             alloc,
@@ -296,7 +301,6 @@ impl MemoryState<ImplUnsafe, DefaultMemoryManager> {
         let base = DefaultMemoryManager.allocate(layout)?;
         Ok(MemoryState {
             base: BaseLocation(base),
-            capacity: layout.size(),
             alignment: layout.align(),
             tracker: AllocationTracker::new(layout.size()),
             alloc: DefaultMemoryManager,
@@ -310,7 +314,6 @@ impl<A: ManageMemory> MemoryState<ImplUnsafe, A> {
         let base = alloc.allocate(layout)?;
         Ok(MemoryState {
             base: BaseLocation(base),
-            capacity: layout.size(),
             alignment: layout.align(),
             tracker: AllocationTracker::new(layout.size()),
             alloc,
@@ -323,7 +326,6 @@ impl<A: ManageMemory + Clone> Clone for MemoryState<ImplUnsafe, A> {
     fn clone(&self) -> Self {
         Self {
             base: self.base,
-            capacity: self.capacity,
             alignment: self.alignment,
             tracker: self.tracker.clone(),
             alloc: self.alloc.clone(),
@@ -340,7 +342,6 @@ where
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ContiguousMemoryState")
             .field("base", &self.base)
-            .field("capacity", &self.capacity)
             .field("alignment", &self.alignment)
             .field("tracker", &self.tracker)
             .finish()
@@ -361,13 +362,14 @@ impl<Impl: StorageDetails<A>, A: ManageMemory> Drop for MemoryState<Impl, A> {
 pub struct BaseLocation<Impl: StorageDetails<A>, A: ManageMemory>(pub Impl::Base);
 
 #[cfg(feature = "debug")]
-impl<Impl: StorageDetails> core::fmt::Debug for BaseLocation<Impl>
+impl<Impl: StorageDetails<A>, A: ManageMemory> core::fmt::Debug for BaseLocation<Impl, A>
 where
-    Impl::LockResult<*mut u8>: core::fmt::Debug,
+    Impl::LockResult<BaseAddress>: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("BaseLocation")
-            .field(&Impl::get_base(&self.0))
+        f.debug_struct("BaseLocation")
+            .field("pos", &Impl::get_base(&self.0))
+            .field("size", &Impl::get_base(&self.0))
             .finish()
     }
 }

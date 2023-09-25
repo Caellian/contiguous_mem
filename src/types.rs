@@ -201,7 +201,8 @@ pub(crate) const fn is_layout_valid(size: usize, align: usize) -> bool {
     if !align.is_power_of_two() {
         return false;
     };
-    return size <= isize::MAX as usize - (align - 1);
+
+    size <= isize::MAX as usize - (align - 1)
 }
 
 /// Trait that unifies passing either a [`Layout`] directly or a `&T` where

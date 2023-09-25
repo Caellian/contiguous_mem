@@ -81,6 +81,16 @@ pub enum LockTarget {
     Reference,
 }
 
+impl LockTarget {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            LockTarget::BaseAddress => "base address",
+            LockTarget::AllocationTracker => "allocation tracker",
+            LockTarget::Reference => "reference",
+        }
+    }
+}
+
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Display for NoFreeMemoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -135,26 +145,13 @@ pub enum LockingError {
 impl Display for LockingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            LockingError::Poisoned { target } => write!(
-                f,
-                "Cannot acquire lock: {}",
-                match target {
-                    LockTarget::BaseAddress => {
-                        "base address Mutex was poisoned"
-                    }
-                    LockTarget::AllocationTracker => "AllocationTracker Mutex was poisoned",
-                    LockTarget::Reference =>
-                        "reference concurrent mutable access exclusion flag Mutex was poisoned",
-                }
-            ),
+            LockingError::Poisoned { target } => {
+                write!(f, "Cannot lock {}, it was poisoned", target.as_str())
+            }
             LockingError::WouldBlock { target } => write!(
                 f,
-                "Lock would block the current thread: {}",
-                match target {
-                    LockTarget::BaseAddress => "base address already borrowed",
-                    LockTarget::AllocationTracker => "AllocationTracker already borrowed",
-                    LockTarget::Reference => "reference already borrowed",
-                }
+                "Locking {} would block the current thread",
+                target.as_str()
             ),
         }
     }

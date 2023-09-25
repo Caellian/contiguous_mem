@@ -19,7 +19,7 @@ portable-atomic = { version = "1", default-features = false, optional = true }
 spin = { version = "0.9", optional = true }
 
 [features]
-default = ["sync_impl", "unsafe_impl"]
+default = ["sync_impl", "unsafe_impl", "debug"]
 
 no_std = ["dep:portable-atomic", "dep:spin"]
 debug = []

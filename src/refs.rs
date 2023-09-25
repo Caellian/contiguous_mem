@@ -63,9 +63,9 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
                 state: self.inner.clone(),
                 guard,
                 #[cfg(not(feature = "ptr_metadata"))]
-                value: &*(pos as *mut T),
+                value: &*(pos),
                 #[cfg(feature = "ptr_metadata")]
-                value: &*core::ptr::from_raw_parts(pos as *const (), self.metadata),
+                value: &*core::ptr::from_raw_parts(pos, self.metadata),
             })
         }
     }
@@ -93,9 +93,9 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
                 state: self.inner.clone(),
                 guard,
                 #[cfg(not(feature = "ptr_metadata"))]
-                value: &*(pos as *mut T),
+                value: &*(pos),
                 #[cfg(feature = "ptr_metadata")]
-                value: &*core::ptr::from_raw_parts(pos as *const (), self.metadata),
+                value: &*core::ptr::from_raw_parts(pos, self.metadata),
             })
         }
     }
@@ -117,9 +117,9 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
                 state: self.inner.clone(),
                 guard,
                 #[cfg(not(feature = "ptr_metadata"))]
-                value: &mut *(pos as *mut T),
+                value: &mut *(pos),
                 #[cfg(feature = "ptr_metadata")]
-                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata),
+                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos, self.metadata),
             })
         }
     }
@@ -155,9 +155,9 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
                 state: self.inner.clone(),
                 guard,
                 #[cfg(not(feature = "ptr_metadata"))]
-                value: &mut *(pos as *mut T),
+                value: &mut *(pos),
                 #[cfg(feature = "ptr_metadata")]
-                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata),
+                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos, self.metadata),
             })
         }
     }
@@ -245,14 +245,11 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
         let pos = self.inner.range.offset_base_unwrap(base);
         #[cfg(not(feature = "ptr_metadata"))]
         {
-            Ok(pos as *mut T)
+            Ok(pos)
         }
         #[cfg(feature = "ptr_metadata")]
         {
-            Ok(core::ptr::from_raw_parts_mut::<T>(
-                pos as *mut (),
-                self.metadata,
-            ))
+            Ok(core::ptr::from_raw_parts_mut::<T>(pos, self.metadata))
         }
     }
 
@@ -311,7 +308,7 @@ impl<T: ?Sized, A: ManageMemory> Clone for SyncContiguousEntryRef<T, A> {
 }
 
 #[cfg(feature = "debug")]
-impl<T: ?Sized> core::fmt::Debug for SyncContiguousEntryRef<T> {
+impl<T: ?Sized, A: ManageMemory> core::fmt::Debug for SyncContiguousEntryRef<T, A> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncContiguousEntryRef")
             .field("inner", &self.inner)
@@ -372,9 +369,9 @@ impl<T: ?Sized, A: ManageMemory> ContiguousEntryRef<T, A> {
                 #[cfg(feature = "sync_impl")]
                 guard: (),
                 #[cfg(not(feature = "ptr_metadata"))]
-                value: &*(pos as *mut T),
+                value: &*(pos),
                 #[cfg(feature = "ptr_metadata")]
-                value: &*core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata),
+                value: &*core::ptr::from_raw_parts_mut::<T>(pos, self.metadata),
             })
         }
     }
@@ -414,9 +411,9 @@ impl<T: ?Sized, A: ManageMemory> ContiguousEntryRef<T, A> {
                 #[cfg(feature = "sync_impl")]
                 guard: (),
                 #[cfg(not(feature = "ptr_metadata"))]
-                value: &mut *(pos as *mut T),
+                value: &mut *(pos),
                 #[cfg(feature = "ptr_metadata")]
-                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata),
+                value: &mut *core::ptr::from_raw_parts_mut::<T>(pos, self.metadata),
             })
         }
     }
@@ -512,11 +509,11 @@ impl<T: ?Sized, A: ManageMemory> ContiguousEntryRef<T, A> {
 
         #[cfg(not(feature = "ptr_metadata"))]
         {
-            pos as *mut T
+            pos
         }
         #[cfg(feature = "ptr_metadata")]
         {
-            core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata)
+            core::ptr::from_raw_parts_mut::<T>(pos, self.metadata)
         }
     }
 
@@ -570,7 +567,7 @@ impl<T: ?Sized, A: ManageMemory> Clone for ContiguousEntryRef<T, A> {
 }
 
 #[cfg(feature = "debug")]
-impl<T: ?Sized> core::fmt::Debug for ContiguousEntryRef<T> {
+impl<T: ?Sized, A: ManageMemory> core::fmt::Debug for ContiguousEntryRef<T, A> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ContiguousEntryRef")
             .field("inner", &self.inner)
@@ -593,9 +590,10 @@ pub(crate) mod sealed {
     }
 
     #[cfg(feature = "debug")]
-    impl<T: ?Sized, Impl: ImplDetails> core::fmt::Debug for ReferenceState<T, Impl>
+    impl<T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> core::fmt::Debug
+        for ReferenceState<T, Impl, A>
     where
-        Impl::StorageState: core::fmt::Debug,
+        Impl::StorageState<A>: core::fmt::Debug,
         Impl::BorrowLock: core::fmt::Debug,
     {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

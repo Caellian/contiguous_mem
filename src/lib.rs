@@ -318,7 +318,10 @@ impl<A: ManageMemory> ContiguousMemory<A> {
     /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner.capacity.get()
+        match self.base() {
+            Some(it) => unsafe { it.as_ref().len() },
+            None => 0,
+        }
     }
 
     /// Returns the total size of all stored entries excluding the padding.
@@ -386,7 +389,7 @@ impl<A: ManageMemory> ContiguousMemory<A> {
     pub fn layout(&self) -> Layout {
         unsafe {
             // SAFETY: Constructor would panic if Layout was invalid.
-            Layout::from_size_align_unchecked(self.inner.capacity.get(), self.inner.alignment)
+            base_addr_layout(self.base(), self.align())
         }
     }
 
@@ -515,7 +518,6 @@ impl<A: ManageMemory> ContiguousMemory<A> {
         let new_base = unsafe { self.inner.alloc.grow(prev_base, old_layout, new_layout)? };
 
         self.inner.base.set(new_base);
-        self.inner.capacity.set(new_capacity);
 
         Ok(if new_base != prev_base {
             Some(unsafe {
@@ -608,7 +610,7 @@ impl<A: ManageMemory> ContiguousMemory<A> {
         };
 
         self.inner.base.set(Some(new_base));
-        self.inner.capacity.set(new_capacity);
+
         Ok(if Some(new_base) != prev_base {
             Some(new_base)
         } else {
@@ -667,9 +669,8 @@ impl<A: ManageMemory> ContiguousMemory<A> {
                 )?;
 
                 let new_base = unsafe { self.inner.alloc.allocate(new_layout)?.unwrap_unchecked() };
-
                 self.inner.base.set(Some(new_base));
-                self.inner.capacity.set(layout.size());
+
                 Ok(Some(new_base))
             }
         }
@@ -704,9 +705,8 @@ impl<A: ManageMemory> ContiguousMemory<A> {
                 .shrink(prev_base, self.layout(), new_layout)
         }
         .expect("unable to shrink the container");
-
         self.inner.base.set(new_base);
-        self.inner.capacity.set(new_capacity);
+
         new_base
     }
 
@@ -732,7 +732,7 @@ impl<A: ManageMemory> ContiguousMemory<A> {
         }
         .expect("unable to shrink the container");
         self.inner.base.set(new_base);
-        self.inner.capacity.set(new_capacity);
+
         new_base
     }
 
@@ -853,7 +853,6 @@ impl<A: ManageMemory> ContiguousMemory<A> {
                         }
                         .expect("unable to allocate more memory");
                         self.inner.base.set(new_base);
-                        self.inner.capacity.set(new_capacity);
                     }
                     None => {
                         tracker.grow(layout.size());
@@ -863,7 +862,6 @@ impl<A: ManageMemory> ContiguousMemory<A> {
                             .allocate(layout)
                             .expect("pushed element size exceeds `isize::MAX`");
                         self.inner.base.set(new_base);
-                        self.inner.capacity.set(layout.size());
                     }
                 },
             }
@@ -931,7 +929,7 @@ impl<A: ManageMemory> ContiguousMemory<A> {
     ///
     /// This function isn't unsafe, even though it ignores presence of `Copy`
     /// bound on stored data, because it doesn't create any invalid references.
-    #[must_use]
+    #[must_use = "unused copied collection"]
     pub fn copy_data(&self) -> Self
     where
         A: Clone,
@@ -1017,14 +1015,26 @@ impl<A: ManageMemory> ContiguousMemory<A> {
 }
 
 #[cfg(feature = "debug")]
-impl core::fmt::Debug for ContiguousMemory
+impl<A: ManageMemory> core::fmt::Debug for ContiguousMemory<A>
 where
-    MemoryState<ImplDefault>: core::fmt::Debug,
+    MemoryState<ImplDefault, A>: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ContiguousMemory")
             .field("inner", &self.inner)
             .finish()
+    }
+}
+
+impl Default for ContiguousMemory {
+    fn default() -> Self {
+        ContiguousMemory::new()
+    }
+}
+
+impl<A: ManageMemory + Default> Default for ContiguousMemory<A> {
+    fn default() -> Self {
+        ContiguousMemory::with_alloc(A::default())
     }
 }
 
