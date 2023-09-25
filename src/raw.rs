@@ -229,20 +229,17 @@ impl<A: Allocator> ManageMemory for A {
     }
 }
 
-pub struct MemoryState<Impl: StorageDetails<A>, A: ManageMemory> {
+pub struct MemoryState<Impl: ImplDetails<A>, A: ManageMemory> {
     pub base: BaseLocation<Impl, A>,
     pub alignment: usize,
     pub tracker: Impl::AllocationTracker,
     pub alloc: A,
 }
 
-impl<Impl: StorageDetails<A>, A: ManageMemory> MemoryState<Impl, A> {
+impl<Impl: ImplDetails<A>, A: ManageMemory> MemoryState<Impl, A> {
     /// Returns the layout of the managed memory.
     pub fn layout(&self) -> Layout {
-        unsafe {
-            let capacity = Impl::get_capacity(core::mem::transmute(self));
-            Layout::from_size_align_unchecked(capacity, self.alignment)
-        }
+        unsafe { Impl::get_layout(std::mem::transmute(&self.base), self.alignment) }
     }
 }
 
@@ -333,10 +330,9 @@ impl<A: ManageMemory + Clone> Clone for MemoryState<ImplUnsafe, A> {
     }
 }
 
-impl<A: ManageMemory, Impl: StorageDetails<A>> core::fmt::Debug for MemoryState<Impl, A>
+impl<A: ManageMemory, Impl: ImplDetails<A>> core::fmt::Debug for MemoryState<Impl, A>
 where
     BaseLocation<Impl, A>: core::fmt::Debug,
-    Impl::SizeType: core::fmt::Debug,
     Impl::AllocationTracker: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -348,7 +344,7 @@ where
     }
 }
 
-impl<Impl: StorageDetails<A>, A: ManageMemory> Drop for MemoryState<Impl, A> {
+impl<Impl: ImplDetails<A>, A: ManageMemory> Drop for MemoryState<Impl, A> {
     fn drop(&mut self) {
         let layout = self.layout();
         unsafe {
@@ -359,10 +355,10 @@ impl<Impl: StorageDetails<A>, A: ManageMemory> Drop for MemoryState<Impl, A> {
 
 #[derive(Clone, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct BaseLocation<Impl: StorageDetails<A>, A: ManageMemory>(pub Impl::Base);
+pub struct BaseLocation<Impl: ImplDetails<A>, A: ManageMemory>(pub Impl::Base);
 
 #[cfg(feature = "debug")]
-impl<Impl: StorageDetails<A>, A: ManageMemory> core::fmt::Debug for BaseLocation<Impl, A>
+impl<Impl: ImplDetails<A>, A: ManageMemory> core::fmt::Debug for BaseLocation<Impl, A>
 where
     Impl::LockResult<BaseAddress>: core::fmt::Debug,
 {
@@ -375,7 +371,7 @@ where
 }
 
 impl<Impl: ImplDetails<A>, A: ManageMemory> Deref for BaseLocation<Impl, A> {
-    type Target = <Impl as StorageDetails<A>>::Base;
+    type Target = <Impl as ImplDetails<A>>::Base;
 
     fn deref(&self) -> &Self::Target {
         &self.0

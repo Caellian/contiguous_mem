@@ -14,7 +14,7 @@ use crate::common::ImplConcurrent;
 use crate::error::{LockTarget, LockingError};
 
 use crate::{
-    common::{ImplDefault, ImplDetails, StorageDetails},
+    common::{ImplDefault, ImplDetails, ImplReferencing},
     error::RegionBorrowError,
     range::ByteRange,
     raw::ManageMemory,
@@ -56,7 +56,7 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
         let guard = self.inner.borrow_kind.read_named(LockTarget::Reference)?;
 
         unsafe {
-            let base = <ImplConcurrent as StorageDetails<A>>::get_base(&self.inner.state.base)?;
+            let base = <ImplConcurrent as ImplDetails<A>>::get_base(&self.inner.state.base)?;
             let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryReadGuard {
@@ -86,7 +86,7 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
             .try_read_named(LockTarget::Reference)?;
 
         unsafe {
-            let base = <ImplConcurrent as StorageDetails<A>>::get_base(&self.inner.state.base)?;
+            let base = <ImplConcurrent as ImplDetails<A>>::get_base(&self.inner.state.base)?;
             let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryReadGuard {
@@ -110,7 +110,7 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
     {
         let guard = self.inner.borrow_kind.write_named(LockTarget::Reference)?;
         unsafe {
-            let base = <ImplConcurrent as StorageDetails<A>>::get_base(&self.inner.state.base)?;
+            let base = <ImplConcurrent as ImplDetails<A>>::get_base(&self.inner.state.base)?;
             let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryWriteGuard {
@@ -148,7 +148,8 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
             .borrow_kind
             .try_write_named(LockTarget::Reference)?;
         unsafe {
-            let base = <ImplConcurrent as StorageDetails<A>>::try_get_base(&self.inner.state.base)?;
+            let base =
+                <ImplConcurrent as ImplReferencing<A>>::try_get_base(&self.inner.state.base)?;
             let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryWriteGuard {
@@ -241,7 +242,7 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
     where
         T: RefSizeReq,
     {
-        let base = <ImplConcurrent as StorageDetails<A>>::get_base(&self.inner.state.base)?;
+        let base = <ImplConcurrent as ImplDetails<A>>::get_base(&self.inner.state.base)?;
         let pos = self.inner.range.offset_base_unwrap(base);
         #[cfg(not(feature = "ptr_metadata"))]
         {
@@ -361,7 +362,7 @@ impl<T: ?Sized, A: ManageMemory> ContiguousEntryRef<T, A> {
         }
 
         unsafe {
-            let base = <ImplDefault as StorageDetails<A>>::get_base(&self.inner.state.base);
+            let base = <ImplDefault as ImplDetails<A>>::get_base(&self.inner.state.base);
             let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryReadGuard {
@@ -403,7 +404,7 @@ impl<T: ?Sized, A: ManageMemory> ContiguousEntryRef<T, A> {
         }
 
         unsafe {
-            let base = <ImplDefault as StorageDetails<A>>::get_base(&self.inner.state.base);
+            let base = <ImplDefault as ImplDetails<A>>::get_base(&self.inner.state.base);
             let pos = self.inner.range.offset_base_unwrap(base);
 
             Ok(MemoryWriteGuard {
@@ -504,7 +505,7 @@ impl<T: ?Sized, A: ManageMemory> ContiguousEntryRef<T, A> {
     where
         T: RefSizeReq,
     {
-        let base = <ImplDefault as StorageDetails<A>>::get_base(&self.inner.state.base);
+        let base = <ImplDefault as ImplDetails<A>>::get_base(&self.inner.state.base);
         let pos = self.inner.range.offset_base_unwrap(base);
 
         #[cfg(not(feature = "ptr_metadata"))]
@@ -581,8 +582,8 @@ pub(crate) mod sealed {
     use super::*;
 
     /// Internal state of [`ContiguousEntryRef`] and [`SyncContiguousEntryRef`].
-    pub struct ReferenceState<T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> {
-        pub state: Impl::StorageState<A>,
+    pub struct ReferenceState<T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> {
+        pub state: Impl::StorageState,
         pub range: ByteRange,
         pub borrow_kind: Impl::BorrowLock,
         pub drop_fn: DropFn,
@@ -590,10 +591,10 @@ pub(crate) mod sealed {
     }
 
     #[cfg(feature = "debug")]
-    impl<T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> core::fmt::Debug
+    impl<T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> core::fmt::Debug
         for ReferenceState<T, Impl, A>
     where
-        Impl::StorageState<A>: core::fmt::Debug,
+        Impl::StorageState: core::fmt::Debug,
         Impl::BorrowLock: core::fmt::Debug,
     {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -605,9 +606,9 @@ pub(crate) mod sealed {
         }
     }
 
-    impl<T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Drop for ReferenceState<T, Impl, A> {
+    impl<T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> Drop for ReferenceState<T, Impl, A> {
         fn drop(&mut self) {
-            let base = Impl::get_base(&Impl::deref_state(&self.state).base);
+            let base = Impl::get_base(&self.state.base);
             let tracker = Impl::get_allocation_tracker(&mut self.state);
             if let Some(it) = Impl::free_region(tracker, base, self.range) {
                 (self.drop_fn)(it);
@@ -632,7 +633,7 @@ use sealed::*;
 /// A smart reference wrapper responsible for tracking and managing a flag
 /// that indicates whether the memory segment is actively being written to.
 #[cfg_attr(feature = "debug", derive(Debug))]
-pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> {
+pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> {
     state: Impl::RefState<T>,
     #[allow(unused)]
     #[cfg(feature = "sync_impl")]
@@ -640,7 +641,7 @@ pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory
     value: &'a mut T,
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Deref
+impl<'a, T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> Deref
     for MemoryWriteGuard<'a, T, Impl, A>
 {
     type Target = T;
@@ -650,7 +651,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Deref
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> DerefMut
+impl<'a, T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> DerefMut
     for MemoryWriteGuard<'a, T, Impl, A>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -658,7 +659,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> DerefMut
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Drop
+impl<'a, T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> Drop
     for MemoryWriteGuard<'a, T, Impl, A>
 {
     fn drop(&mut self) {
@@ -669,7 +670,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Drop
 /// A smart reference wrapper responsible for tracking and managing a flag
 /// that indicates whether the memory segment is actively being read from.
 #[cfg_attr(feature = "debug", derive(Debug))]
-pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> {
+pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> {
     state: Impl::RefState<T>,
     #[allow(unused)]
     #[cfg(feature = "sync_impl")]
@@ -677,7 +678,7 @@ pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory>
     value: &'a T,
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Deref
+impl<'a, T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> Deref
     for MemoryReadGuard<'a, T, Impl, A>
 {
     type Target = T;
@@ -687,7 +688,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Deref
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Drop
+impl<'a, T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> Drop
     for MemoryReadGuard<'a, T, Impl, A>
 {
     fn drop(&mut self) {

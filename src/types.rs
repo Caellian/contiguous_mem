@@ -5,9 +5,6 @@ mod std_imports {
     pub use std::rc::Rc;
     #[cfg(feature = "sync_impl")]
     pub use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-    #[cfg(feature = "sync_impl")]
-    pub use std::sync::atomic::{AtomicUsize, Ordering};
 }
 
 #[cfg(not(feature = "no_std"))]
@@ -20,9 +17,6 @@ mod nostd_imports {
     pub use ::alloc::sync::Arc;
     #[cfg(feature = "sync_impl")]
     pub use spin::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-    #[cfg(feature = "sync_impl")]
-    pub use portable_atomic::{AtomicUsize, Ordering};
 
     pub use ::alloc::vec;
     pub use ::alloc::vec::Vec;
