@@ -32,7 +32,7 @@ pub use unsafe_impl::UnsafeContiguousMemory;
 
 /// Memory allocation and management primitives.
 pub mod memory {
-    pub use crate::raw::{BaseAddress, BasePtr, DefaultMemoryManager, MemoryManager};
+    pub use crate::raw::{BaseAddress, BasePtr, DefaultMemoryManager, ManageMemory};
 }
 pub use memory::*;
 pub use refs::{CERef, ContiguousEntryRef};
@@ -77,7 +77,7 @@ use types::*;
 #[doc = include_str!("../examples/default_impl.rs")]
 /// ```
 #[derive(Clone)]
-pub struct ContiguousMemory<A: MemoryManager = DefaultMemoryManager> {
+pub struct ContiguousMemory<A: ManageMemory = DefaultMemoryManager> {
     inner: Rc<MemoryState<ImplDefault, A>>,
 }
 
@@ -88,7 +88,7 @@ impl ContiguousMemory {
     /// # Examples
     /// ```rust
     /// # #![allow(unused_mut)]
-    /// use contiguous_mem::*;
+    /// use contiguous_mem::ContiguousMemory;
     ///
     /// let mut storage = ContiguousMemory::new();
     /// ```
@@ -112,11 +112,11 @@ impl ContiguousMemory {
     /// # Examples
     /// ```rust
     /// # #![allow(unused_mut)]
-    /// use contiguous_mem::*;
+    /// use contiguous_mem::ContiguousMemory;
     ///
     /// let mut storage = ContiguousMemory::with_capacity(1024);
-    /// # assert_eq!(storage.get_capacity(), 1024);
-    /// # assert_eq!(storage.get_align(), core::mem::align_of::<usize>());
+    /// # assert_eq!(storage.capacity(), 1024);
+    /// # assert_eq!(storage.align(), core::mem::align_of::<usize>());
     /// ```
     pub fn with_capacity(capacity: usize) -> Self {
         if !is_layout_valid(capacity, align_of::<usize>()) {
@@ -141,15 +141,15 @@ impl ContiguousMemory {
     /// # Examples
     /// ```rust
     /// # #![allow(unused_mut)]
-    /// # use core::mem::align_of;
-    /// use contiguous_mem::*;
+    /// use core::mem::align_of;
     /// use core::alloc::Layout;
+    /// use contiguous_mem::ContiguousMemory;
     ///
     /// let mut storage = ContiguousMemory::with_layout(
     ///     Layout::from_size_align(512, align_of::<u32>()).unwrap()
     /// );
-    /// # assert_eq!(storage.get_capacity(), 512);
-    /// # assert_eq!(storage.get_align(), align_of::<u32>());
+    /// # assert_eq!(storage.capacity(), 512);
+    /// # assert_eq!(storage.align(), align_of::<u32>());
     /// ```
     pub fn with_layout(layout: Layout) -> Self {
         Self {
@@ -161,7 +161,7 @@ impl ContiguousMemory {
     }
 }
 
-impl<A: MemoryManager> ContiguousMemory<A> {
+impl<A: ManageMemory> ContiguousMemory<A> {
     /// Creates a new, empty `ContiguousMemory` instance aligned with alignment
     /// of `usize` that uses the specified allocator.
     ///
@@ -169,13 +169,14 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// ```rust
     /// # #![allow(unused_mut)]
     /// # use core::mem::align_of;
-    /// use contiguous_mem::*;
+    /// use contiguous_mem::ContiguousMemory;
+    /// use contiguous_mem::memory::DefaultMemoryManager;
     ///
     /// let mut storage = ContiguousMemory::with_alloc(
     ///     DefaultMemoryManager
     /// );
-    /// # assert_eq!(storage.get_capacity(), 0);
-    /// # assert_eq!(storage.get_align(), align_of::<usize>());
+    /// # assert_eq!(storage.capacity(), 0);
+    /// # assert_eq!(storage.align(), align_of::<usize>());
     /// ```
     pub fn with_alloc(alloc: A) -> Self {
         unsafe {
@@ -196,14 +197,15 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// ```rust
     /// # #![allow(unused_mut)]
     /// # use core::mem::align_of;
-    /// use contiguous_mem::*;
+    /// use contiguous_mem::ContiguousMemory;
+    /// use contiguous_mem::memory::DefaultMemoryManager;
     ///
     /// let mut storage = ContiguousMemory::with_capacity_and_alloc(
     ///     256,
     ///     DefaultMemoryManager
     /// );
-    /// # assert_eq!(storage.get_capacity(), 256);
-    /// # assert_eq!(storage.get_align(), align_of::<usize>());
+    /// # assert_eq!(storage.capacity(), 256);
+    /// # assert_eq!(storage.align(), align_of::<usize>());
     /// ```
     pub fn with_capacity_and_alloc(capacity: usize, alloc: A) -> Self {
         if !is_layout_valid(capacity, align_of::<usize>()) {
@@ -230,16 +232,17 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// # Examples
     /// ```rust
     /// # #![allow(unused_mut)]
-    /// # use core::mem::align_of;
+    /// use core::mem::align_of;
     /// use core::alloc::Layout;
-    /// use contiguous_mem::*;
+    /// use contiguous_mem::ContiguousMemory;
+    /// use contiguous_mem::memory::DefaultMemoryManager;
     ///
     /// let mut storage = ContiguousMemory::with_layout_and_alloc(
     ///     Layout::from_size_align(0, align_of::<u32>()).unwrap(),
     ///     DefaultMemoryManager
     /// );
-    /// # assert_eq!(storage.get_capacity(), 0);
-    /// # assert_eq!(storage.get_align(), align_of::<u32>());
+    /// # assert_eq!(storage.capacity(), 0);
+    /// # assert_eq!(storage.align(), align_of::<u32>());
     /// ```
     pub fn with_layout_and_alloc(layout: Layout, alloc: A) -> Self {
         Self {
@@ -254,40 +257,133 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     ///
     /// # Examples
     /// ```rust
-    /// use contiguous_mem::*;
+    /// use contiguous_mem::ContiguousMemory;
     ///
     /// let mut s = ContiguousMemory::new();
+    /// assert_eq!(s.base(), None);
     ///
-    /// assert_eq!(s.get_base(), None);
-    ///
-    /// let value = s.push(6);
-    ///
-    /// assert_eq!(s.get_base().is_some(), true);
+    /// let r = s.push(6);
+    /// assert_eq!(s.base().is_some(), true);
     /// ```
     #[inline]
-    pub fn get_base(&self) -> BaseAddress {
+    pub fn base(&self) -> BaseAddress {
         self.inner.base.get()
     }
 
-    /// Returns the current capacity of the memory container.
+    /// Returns a pointer to the base address of the allocated memory or `null`
+    /// if the container didn't allocate.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use core::ptr::null;
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    /// assert_eq!(s.base_ptr(), null());
+    ///
+    /// let r = s.push(3);
+    /// assert!(s.base_ptr() != null());
+    /// ```
+    pub fn base_ptr(&self) -> *const u8 {
+        match self.base() {
+            Some(it) => it.as_ptr() as *const u8,
+            None => core::ptr::null(),
+        }
+    }
+
+    /// Returns the current capacity (in bytes) of the memory container.
     ///
     /// The capacity represents the size of the memory block that has been
     /// allocated for storing data. It may be larger than the amount of data
     /// currently stored within the container.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    /// assert_eq!(s.capacity(), 0);
+    ///
+    /// let r1 = s.push(1u8);
+    /// assert_eq!(s.capacity(), 1);
+    ///
+    /// // will add required padding for alignment:
+    /// let r2 = s.push(2u32);
+    /// assert_eq!(s.capacity(), 8);
+    ///
+    /// // will fill empty region before r2:
+    /// let r3 = s.push(3u8);
+    /// let r4 = s.push(4u8);
+    /// assert_eq!(s.capacity(), 8);
+    /// ```
     #[inline]
-    pub fn get_capacity(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.inner.capacity.get()
     }
 
-    /// Returns the alignment of the memory container.
+    /// Returns the total size of all stored entries excluding the padding.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    /// assert_eq!(s.size(), 0);
+    ///
+    /// let r1 = s.push(1u8);
+    /// assert_eq!(s.size(), 1);
+    ///
+    /// // will add required padding for alignment:
+    /// let r2 = s.push(2u32);
+    /// assert_eq!(s.size(), 5);
+    ///
+    /// // will fill empty region before r2:
+    /// let r3 = s.push(3u8);
+    /// let r4 = s.push(4u8);
+    /// assert_eq!(s.size(), 7);
+    /// ```
     #[inline]
-    pub fn get_align(&self) -> usize {
+    pub fn size(&self) -> usize {
+        self.capacity() - self.inner.tracker.borrow().count_free()
+    }
+
+    /// Returns the alignment of the memory container.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # #![allow(unused_mut)]
+    /// use core::mem::align_of;
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    /// assert_eq!(s.align(), align_of::<usize>());
+    /// ```
+    #[inline]
+    pub fn align(&self) -> usize {
         self.inner.alignment
     }
 
     /// Returns the layout of the memory region containing stored data.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use core::alloc::Layout;
+    /// use core::mem::align_of;
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    /// assert_eq!(
+    ///     s.layout(),
+    ///     Layout::from_size_align(0, align_of::<usize>()).unwrap()
+    /// );
+    /// let r = s.push(b"Hello world");
+    /// assert_eq!(
+    ///     s.layout(),
+    ///     Layout::from_size_align(8, align_of::<usize>()).unwrap()
+    /// );
+    /// ```
     #[inline]
-    pub fn get_layout(&self) -> Layout {
+    pub fn layout(&self) -> Layout {
         unsafe {
             // SAFETY: Constructor would panic if Layout was invalid.
             Layout::from_size_align_unchecked(self.inner.capacity.get(), self.inner.alignment)
@@ -296,7 +392,22 @@ impl<A: MemoryManager> ContiguousMemory<A> {
 
     /// Returns `true` if provided generic type `T` can be stored without
     /// growing the container.
-    pub fn can_push<T>(&self) -> bool {
+    ///
+    /// # Examples
+    /// ```rust
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    /// assert_eq!(s.can_push_t::<u32>(), false);
+    ///
+    /// let r1 = s.push(1u32);
+    /// assert_eq!(s.can_push_t::<u32>(), false);
+    ///
+    /// let r2 = s.push(2u32);
+    /// let r3 = s.push(3u32);
+    /// assert_eq!(s.can_push_t::<u32>(), true);
+    /// ```
+    pub fn can_push_t<T>(&self) -> bool {
         let layout = Layout::new::<T>();
         let tracker = self.inner.tracker.borrow();
         tracker.peek_next(layout).is_some()
@@ -304,21 +415,32 @@ impl<A: MemoryManager> ContiguousMemory<A> {
 
     /// Returns `true` if the provided `value` can be stored without growing the
     /// container.
-    pub fn can_push_value<T>(&self, value: &T) -> bool {
-        let layout = Layout::for_value(value);
+    ///
+    /// `value` can either be a [`Layout`] or a reference to a `Sized` value.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use core::alloc::Layout;
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    ///
+    /// let r1 = s.push([0u32; 4]);
+    ///
+    /// let a = [1u32; 2];
+    /// assert_eq!(s.can_push(&a), false);
+    /// let r2 = s.push(a);
+    ///
+    /// assert_eq!(s.can_push(Layout::new::<u64>()), true);
+    /// ```
+    pub fn can_push(&self, value: impl HasLayout) -> bool {
+        let layout = value.layout();
         let tracker = self.inner.tracker.borrow();
         tracker.peek_next(layout).is_some()
     }
 
-    /// Returns `true` if the provided `layout` can be stored without growing
-    /// the container.
-    pub fn can_push_layout(&self, layout: Layout) -> bool {
-        let tracker = self.inner.tracker.borrow();
-        tracker.peek_next(layout).is_some()
-    }
-
-    /// Resizes the memory container to the specified `new_capacity`, optionally
-    /// returning the new base address and size of the stored items.
+    /// Grows the memory container to the specified `new_capacity`, optionally
+    /// returning the new base address and size of the underlying memory.
     ///
     /// If the base address of the memory block stays the same the returned
     /// value is `None`. If `new_capacity` is 0, the retuned pointer will be an
@@ -328,56 +450,86 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     ///
     /// Panics if the new capacity exceeds `isize::MAX` or the allocator
     /// operation fails.
-    pub fn resize(&mut self, new_capacity: usize) -> Option<BasePtr> {
-        match self.try_resize(new_capacity) {
+    ///
+    /// # Examples
+    /// ```rust
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::with_capacity(4);
+    /// assert_eq!(s.capacity(), 4);
+    /// assert_eq!(s.size(), 0);
+    ///
+    /// let r = s.push(1u32);
+    /// assert_eq!(s.size(), 4);
+    /// assert_eq!(s.can_push(&2u32), false);
+    ///
+    /// s.grow_to(8);
+    /// assert_eq!(s.can_push(&2u32), true);
+    /// ```
+    pub fn grow_to(&mut self, new_capacity: usize) -> Option<BasePtr> {
+        match self.try_grow_to(new_capacity) {
             Ok(it) => it,
             Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
             Err(MemoryError::Allocator(_)) => panic!("allocator error"),
         }
     }
 
-    /// Tries resizing the memory container to the specified `new_capacity`,
-    /// optionally returning the new base address and size of the stored items,
-    /// or a [`MemoryError`] if the new capacity exceeds `isize::MAX` or the
-    /// allocator can't allocate required memory.
+    /// Tries growing the memory container to the specified `new_capacity`,
+    /// optionally returning the new base address and size of the underlying
+    /// memory, or a [`MemoryError`] if the new capacity exceeds `isize::MAX` or
+    /// the allocator can't allocate required memory.
     ///
     /// If the base address of the memory block stays the same the returned
-    /// value is `None`. If `new_capacity` is 0, the retuned pointer will be an
-    /// invalid pointer with container alignment.
-    pub fn try_resize(&mut self, new_capacity: usize) -> Result<Option<BasePtr>, MemoryError> {
-        let old_capacity = self.get_capacity();
-        let mut tracker = self.inner.tracker.borrow_mut();
-        let new_capacity = core::cmp::max(tracker.min_len(), new_capacity);
+    /// value is `None`.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    ///
+    /// assert!(s.try_grow_to(1024).is_ok());
+    ///
+    /// let el_count: usize = 42;
+    /// let el_size: usize = 288230376151711744; // bad read?
+    ///
+    /// let mut required_size: usize = 1024;
+    /// for i in 0..el_count {
+    ///     required_size += el_size;
+    /// }
+    /// assert!(s.try_grow_to(required_size).is_err());
+    /// ```
+    pub fn try_grow_to(&mut self, new_capacity: usize) -> Result<Option<BasePtr>, MemoryError> {
+        let old_capacity = self.capacity();
+        let new_capacity = core::cmp::max(old_capacity, new_capacity);
         if new_capacity == old_capacity {
             return Ok(None);
         }
 
-        tracker
-            .resize(new_capacity)
-            .expect("unable to resize allocation tracker");
+        self.inner.tracker.borrow_mut().grow(new_capacity);
 
-        let old_layout = self.get_layout();
+        let old_layout = self.layout();
         let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)?;
-        let prev_base = self.get_base();
 
-        let new_base = unsafe {
-            if new_capacity > old_capacity {
-                self.inner.alloc.grow(prev_base, old_layout, new_layout)?
-            } else {
-                self.inner.alloc.shrink(prev_base, old_layout, new_layout)?
-            }
-        };
+        let prev_base = self.base();
+        let new_base = unsafe { self.inner.alloc.grow(prev_base, old_layout, new_layout)? };
 
         self.inner.base.set(new_base);
         self.inner.capacity.set(new_capacity);
+
         Ok(if new_base != prev_base {
-            Some(new_base.unwrap_or_else(|| unsafe { null_base(new_layout.align()) }))
+            Some(unsafe {
+                // SAFETY: new_capacity must be > 0, because it's max of
+                // old_capacity and passed argument, if both are 0 we return
+                // early
+                new_base.unwrap_unchecked()
+            })
         } else {
             None
         })
     }
 
-    /// Grows the underlying memory by specified `additional` bytes.
+    /// Grows the underlying memory by `additional` number of bytes.
     ///
     /// After calling this function, new capacity will be equal to:
     /// `self.get_capacity() + additional`.
@@ -386,6 +538,22 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     ///
     /// Panics if attempting to grow the container to a capacity larger than
     /// `isize::MAX` or the allocator can't allocate required memory.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::with_capacity(4);
+    /// assert_eq!(s.capacity(), 4);
+    /// assert_eq!(s.size(), 0);
+    ///
+    /// let r = s.push(1u32);
+    /// assert_eq!(s.size(), 4);
+    /// assert_eq!(s.can_push(&2u32), false);
+    ///
+    /// s.reserve(4);
+    /// assert_eq!(s.can_push(&2u32), true);
+    /// ```
     #[inline]
     pub fn reserve(&mut self, additional: usize) -> Option<BasePtr> {
         match self.try_reserve(additional) {
@@ -395,24 +563,42 @@ impl<A: MemoryManager> ContiguousMemory<A> {
         }
     }
 
-    /// Tries grows the underlying memory by specified `additional` bytes,
+    /// Tries growing the underlying memory by `additional` number of bytes,
     /// returning a [`MemoryError`] error if the new capacity exceeds
     /// `isize::MAX` or the allocator can't allocate required memory.
     ///
     /// After calling this function, new capacity will be equal to:
     /// `self.get_capacity() + additional`.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use contiguous_mem::ContiguousMemory;
+    ///
+    /// let mut s = ContiguousMemory::new();
+    ///
+    /// assert!(s.try_reserve(1024).is_ok());
+    ///
+    /// let el_count: usize = 42;
+    /// let el_size: usize = 288230376151711744; // bad read?
+    ///
+    /// let mut required_size: usize = 0;
+    /// for i in 0..el_count {
+    ///     required_size += el_size;
+    /// }
+    /// assert!(s.try_reserve(required_size).is_err());
+    /// ```
     pub fn try_reserve(&mut self, additional: usize) -> Result<Option<BasePtr>, MemoryError> {
         if additional == 0 {
             return Ok(None);
         }
 
-        let old_capacity = self.get_capacity();
+        let old_capacity = self.capacity();
         let new_capacity = old_capacity.saturating_add(additional);
 
         self.inner.tracker.borrow_mut().grow(new_capacity);
-        let old_layout = self.get_layout();
+        let old_layout = self.layout();
         let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)?;
-        let prev_base = self.get_base();
+        let prev_base = self.base();
 
         let new_base = unsafe {
             self.inner
@@ -442,7 +628,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// Panics if attempting to grow the container to a capacity larger than
     /// `isize::MAX` or the allocator can't allocate required memory.
     #[inline]
-    pub fn reserve_layout(&mut self, layout: Layout) -> Option<BasePtr> {
+    pub fn reserve_layout(&mut self, layout: impl HasLayout) -> Option<BasePtr> {
         match self.try_reserve_layout(layout) {
             Ok(it) => it,
             Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
@@ -458,11 +644,15 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     ///
     /// After calling this function, new capacity will be equal to:
     /// `self.get_capacity() + padding + layout.size()`.
-    pub fn try_reserve_layout(&mut self, layout: Layout) -> Result<Option<BasePtr>, MemoryError> {
+    pub fn try_reserve_layout(
+        &mut self,
+        layout: impl HasLayout,
+    ) -> Result<Option<BasePtr>, MemoryError> {
+        let layout = layout.layout();
         if layout.size() == 0 {
             return Ok(None);
         }
-        match self.get_base() {
+        match self.base() {
             Some(base) => {
                 let last =
                     unsafe { (base.as_ptr() as *mut u8).add(self.inner.tracker.borrow().len()) };
@@ -499,7 +689,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
             .shrink(new_capacity)
             .expect("unable to shrink the allocation tracker");
         let prev_base = self.inner.base.get();
-        let old_layout = self.get_layout();
+        let old_layout = self.layout();
         if new_capacity == old_layout.size() {
             return prev_base;
         }
@@ -513,7 +703,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
         let new_base = unsafe {
             self.inner
                 .alloc
-                .shrink(prev_base, self.get_layout(), new_layout)
+                .shrink(prev_base, self.layout(), new_layout)
         }
         .expect("unable to shrink the container");
         self.inner.base.set(new_base);
@@ -529,7 +719,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
             Some(it) => it,
             None => return prev_base,
         };
-        let old_layout = self.get_layout();
+        let old_layout = self.layout();
         let new_layout = unsafe {
             // SAFETY: Previous layout was valid and had valid alignment,
             // new one is smaller with same alignment so it must be
@@ -539,7 +729,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
         let new_base = unsafe {
             self.inner
                 .alloc
-                .shrink(prev_base, self.get_layout(), new_layout)
+                .shrink(prev_base, self.layout(), new_layout)
         }
         .expect("unable to shrink the container");
         self.inner.base.set(new_base);
@@ -630,7 +820,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
         let mut tracker = self.inner.tracker.borrow_mut();
 
         let range = loop {
-            let base = self.get_base();
+            let base = self.base();
             match tracker.take_next(base, layout) {
                 Ok(taken) => {
                     let found = taken.offset_base_unwrap(base);
@@ -641,7 +831,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
                 }
                 Err(AllocationTrackerError::NoFreeMemory) => match base {
                     Some(prev_base) => {
-                        let curr_capacity = self.get_capacity();
+                        let curr_capacity = self.capacity();
 
                         let start_free =
                             (prev_base.as_ptr() as *const u8).add(tracker.last_offset());
@@ -653,7 +843,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
                             .max(curr_capacity + increment);
 
                         tracker.grow(new_capacity);
-                        let old_layout = self.get_layout();
+                        let old_layout = self.layout();
                         let new_layout = Layout::from_size_align(new_capacity, old_layout.align())
                             .expect("new capacity exceeds `isize::MAX`");
 
@@ -751,13 +941,13 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     where
         A: Clone,
     {
-        let current_layout = self.get_layout();
+        let current_layout = self.layout();
         let result = Self::with_layout_and_alloc(current_layout, self.inner.alloc.clone());
-        match self.get_base() {
+        match self.base() {
             Some(base) => unsafe {
                 core::ptr::copy_nonoverlapping(
                     base.as_ptr() as *const (),
-                    result.get_base().unwrap_unchecked().as_ptr() as *mut (),
+                    result.base().unwrap_unchecked().as_ptr() as *mut (),
                     current_layout.size(),
                 );
             },
@@ -829,7 +1019,7 @@ impl<A: MemoryManager> ContiguousMemory<A> {
     /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
     pub fn forget(self) -> (BaseAddress, Layout) {
         let base = self.inner.base.get();
-        let layout = self.get_layout();
+        let layout = self.layout();
         core::mem::forget(self);
         (base, layout)
     }
@@ -849,8 +1039,6 @@ where
 
 #[cfg(all(test, not(feature = "no_std")))]
 mod test {
-    use core::mem::align_of;
-
     use super::*;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -916,59 +1104,6 @@ mod test {
     }
 
     #[test]
-    fn resize_manually() {
-        let mut memory = ContiguousMemory::with_capacity(512);
-
-        let person_a = Person {
-            name: "Larry".to_string(),
-            last_name: "Taylor".to_string(),
-        };
-
-        let car_a = Car {
-            owner: person_a.clone(),
-            driver: Some(person_a),
-            cost: 20_000,
-            miles: 30123,
-        };
-
-        let stored_car = memory.push(car_a.clone());
-
-        memory.resize(1024).unwrap();
-        assert_eq!(memory.get_capacity(), 1024);
-
-        assert_eq!(*stored_car.get(), car_a);
-
-        memory.resize(128).unwrap();
-        assert_eq!(memory.get_capacity(), 128);
-
-        assert_eq!(*stored_car.get(), car_a);
-    }
-
-    #[test]
-    fn resize_automatically() {
-        let mut memory =
-            ContiguousMemory::with_layout(Layout::from_size_align(12, align_of::<u64>()).unwrap());
-
-        {
-            let _a = memory.push(1u32);
-            let _b = memory.push(2u32);
-            let _c = memory.push(3u32);
-            assert_eq!(memory.can_push::<u32>(), false);
-            let _d = memory.push(4u32);
-            assert_eq!(memory.get_capacity(), 24);
-        }
-
-        memory.try_resize(5).expect("can't shrink empty storage");
-        {
-            memory.push_persisted(1u16);
-            memory.push_persisted(2u16);
-            assert_eq!(memory.can_push::<u64>(), false);
-            memory.push_persisted(3u64);
-            assert_eq!(memory.get_capacity(), 16);
-        }
-    }
-
-    #[test]
     fn add_to_zero_sized() {
         let mut memory = ContiguousMemory::new();
 
@@ -979,7 +1114,7 @@ mod test {
 
         let stored_person = memory.push(person.clone());
 
-        assert_eq!(memory.get_capacity(), 48);
+        assert_eq!(memory.capacity(), 48);
         assert_eq!(*stored_person.get(), person);
     }
 }

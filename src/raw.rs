@@ -39,7 +39,7 @@ pub(crate) const unsafe fn null_base(align: usize) -> BasePtr {
 ///
 /// If `allocator_api` feature is enabled, this trait is implemented for all
 /// [allocators](alloc::Allocator).
-pub trait MemoryManager {
+pub trait ManageMemory {
     /// Allocates a block of memory with size and alignment specified by
     /// `layout` argument.
     fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError>;
@@ -70,11 +70,11 @@ pub trait MemoryManager {
     ) -> Result<BaseAddress, MemoryError>;
 }
 
-/// Default [memory manager](MemoryManager) that uses the methods exposed by
+/// Default [memory manager](ManageMemory) that uses the methods exposed by
 /// [`alloc`] module.
 #[derive(Clone, Copy)]
 pub struct DefaultMemoryManager;
-impl MemoryManager for DefaultMemoryManager {
+impl ManageMemory for DefaultMemoryManager {
     fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
         if layout.size() == 0 {
             Ok(None)
@@ -141,7 +141,7 @@ impl MemoryManager for DefaultMemoryManager {
 }
 
 #[cfg(feature = "allocator_api")]
-impl<A: Allocator> MemoryManager for A {
+impl<A: Allocator> ManageMemory for A {
     fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
         if layout.size() == 0 {
             Ok(None)
@@ -219,7 +219,7 @@ impl<A: Allocator> MemoryManager for A {
     }
 }
 
-pub struct MemoryState<Impl: StorageDetails<A>, A: MemoryManager> {
+pub struct MemoryState<Impl: StorageDetails<A>, A: ManageMemory> {
     pub base: BaseLocation<Impl, A>,
     pub capacity: Impl::SizeType,
     pub alignment: usize,
@@ -227,7 +227,7 @@ pub struct MemoryState<Impl: StorageDetails<A>, A: MemoryManager> {
     pub alloc: A,
 }
 
-impl<Impl: StorageDetails<A>, A: MemoryManager> MemoryState<Impl, A> {
+impl<Impl: StorageDetails<A>, A: ManageMemory> MemoryState<Impl, A> {
     /// Returns the layout of the managed memory.
     pub fn layout(&self) -> Layout {
         unsafe {
@@ -250,7 +250,7 @@ impl MemoryState<ImplDefault, DefaultMemoryManager> {
     }
 }
 
-impl<A: MemoryManager> MemoryState<ImplDefault, A> {
+impl<A: ManageMemory> MemoryState<ImplDefault, A> {
     pub fn new_with_alloc(layout: Layout, alloc: A) -> Result<Rc<Self>, MemoryError> {
         let base = alloc.allocate(layout)?;
         Ok(Rc::new(MemoryState {
@@ -277,7 +277,7 @@ impl MemoryState<ImplConcurrent, DefaultMemoryManager> {
     }
 }
 
-impl<A: MemoryManager> MemoryState<ImplConcurrent, A> {
+impl<A: ManageMemory> MemoryState<ImplConcurrent, A> {
     pub fn new_sync_with_alloc(layout: Layout, alloc: A) -> Result<Arc<Self>, MemoryError> {
         let base = alloc.allocate(layout)?;
         Ok(Arc::new(MemoryState {
@@ -305,7 +305,7 @@ impl MemoryState<ImplUnsafe, DefaultMemoryManager> {
 }
 
 #[cfg(feature = "unsafe_impl")]
-impl<A: MemoryManager> MemoryState<ImplUnsafe, A> {
+impl<A: ManageMemory> MemoryState<ImplUnsafe, A> {
     pub fn new_unsafe_with_alloc(layout: Layout, alloc: A) -> Result<Self, MemoryError> {
         let base = alloc.allocate(layout)?;
         Ok(MemoryState {
@@ -319,7 +319,7 @@ impl<A: MemoryManager> MemoryState<ImplUnsafe, A> {
 }
 
 #[cfg(feature = "unsafe_impl")]
-impl<A: MemoryManager + Clone> Clone for MemoryState<ImplUnsafe, A> {
+impl<A: ManageMemory + Clone> Clone for MemoryState<ImplUnsafe, A> {
     fn clone(&self) -> Self {
         Self {
             base: self.base,
@@ -331,7 +331,7 @@ impl<A: MemoryManager + Clone> Clone for MemoryState<ImplUnsafe, A> {
     }
 }
 
-impl<A: MemoryManager, Impl: StorageDetails<A>> core::fmt::Debug for MemoryState<Impl, A>
+impl<A: ManageMemory, Impl: StorageDetails<A>> core::fmt::Debug for MemoryState<Impl, A>
 where
     BaseLocation<Impl, A>: core::fmt::Debug,
     Impl::SizeType: core::fmt::Debug,
@@ -347,7 +347,7 @@ where
     }
 }
 
-impl<Impl: StorageDetails<A>, A: MemoryManager> Drop for MemoryState<Impl, A> {
+impl<Impl: StorageDetails<A>, A: ManageMemory> Drop for MemoryState<Impl, A> {
     fn drop(&mut self) {
         let layout = self.layout();
         unsafe {
@@ -358,7 +358,7 @@ impl<Impl: StorageDetails<A>, A: MemoryManager> Drop for MemoryState<Impl, A> {
 
 #[derive(Clone, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct BaseLocation<Impl: StorageDetails<A>, A: MemoryManager>(pub Impl::Base);
+pub struct BaseLocation<Impl: StorageDetails<A>, A: ManageMemory>(pub Impl::Base);
 
 #[cfg(feature = "debug")]
 impl<Impl: StorageDetails> core::fmt::Debug for BaseLocation<Impl>
@@ -372,7 +372,7 @@ where
     }
 }
 
-impl<Impl: ImplDetails<A>, A: MemoryManager> Deref for BaseLocation<Impl, A> {
+impl<Impl: ImplDetails<A>, A: ManageMemory> Deref for BaseLocation<Impl, A> {
     type Target = <Impl as StorageDetails<A>>::Base;
 
     fn deref(&self) -> &Self::Target {
@@ -381,14 +381,14 @@ impl<Impl: ImplDetails<A>, A: MemoryManager> Deref for BaseLocation<Impl, A> {
 }
 
 #[cfg(feature = "unsafe_impl")]
-impl<A: MemoryManager + Clone> Copy for BaseLocation<ImplUnsafe, A> {}
+impl<A: ManageMemory + Clone> Copy for BaseLocation<ImplUnsafe, A> {}
 #[cfg(feature = "sync_impl")]
-unsafe impl<Impl: ImplDetails<A>, A: MemoryManager> Send for BaseLocation<Impl, A> where
+unsafe impl<Impl: ImplDetails<A>, A: ManageMemory> Send for BaseLocation<Impl, A> where
     Impl: PartialEq<ImplConcurrent>
 {
 }
 #[cfg(feature = "sync_impl")]
-unsafe impl<Impl: ImplDetails<A>, A: MemoryManager> Sync for BaseLocation<Impl, A> where
+unsafe impl<Impl: ImplDetails<A>, A: ManageMemory> Sync for BaseLocation<Impl, A> where
     Impl: PartialEq<ImplConcurrent>
 {
 }

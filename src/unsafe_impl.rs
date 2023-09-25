@@ -26,7 +26,7 @@ use crate::types::*;
 /// ```rust
 #[doc = include_str!("../examples/unsafe_impl.rs")]
 /// ```
-pub struct UnsafeContiguousMemory<A: MemoryManager = DefaultMemoryManager> {
+pub struct UnsafeContiguousMemory<A: ManageMemory = DefaultMemoryManager> {
     inner: MemoryState<crate::ImplUnsafe, A>,
 }
 
@@ -78,7 +78,7 @@ impl UnsafeContiguousMemory {
     }
 }
 
-impl<A: MemoryManager> UnsafeContiguousMemory<A> {
+impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// Creates a new zero-sized `ContiguousMemory` instance aligned with
     /// alignment of `usize` that uses the specified allocator.
     pub fn with_alloc(alloc: A) -> Self {
@@ -124,8 +124,18 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     }
 
     /// Returns the base address of the allocated memory.
-    pub fn get_base(&self) -> BaseAddress {
+    #[inline]
+    pub fn base(&self) -> BaseAddress {
         self.inner.base.0
+    }
+
+    /// Returns a pointer to the base address of the allocated memory or `null`
+    /// if the container didn't allocate.
+    pub fn base_ptr(&self) -> *const u8 {
+        match self.base() {
+            Some(it) => it.as_ptr() as *const u8,
+            None => core::ptr::null(),
+        }
     }
 
     /// Returns the current capacity of the memory container.
@@ -133,19 +143,26 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     /// The capacity represents the size of the memory block that has been
     /// allocated for storing data. It may be larger than the amount of data
     /// currently stored within the container.
-    pub fn get_capacity(&self) -> usize {
+    #[inline]
+    pub fn capacity(&self) -> usize {
         self.inner.capacity
+    }
+
+    /// Returns the total size of all stored entries excluding the padding.
+    #[inline]
+    pub fn size(&self) -> usize {
+        self.inner.capacity - self.inner.tracker.count_free()
     }
 
     /// Returns the alignment of the memory container.
     #[inline]
-    pub fn get_align(&self) -> usize {
+    pub fn align(&self) -> usize {
         self.inner.alignment
     }
 
     /// Returns the layout of the memory region containing stored data.
     #[inline]
-    pub fn get_layout(&self) -> Layout {
+    pub fn layout(&self) -> Layout {
         unsafe {
             // SAFETY: Constructor would panic if Layout was invalid.
             Layout::from_size_align_unchecked(self.inner.capacity, self.inner.alignment)
@@ -166,47 +183,41 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     /// let mut storage = UnsafeContiguousMemory::new();
     /// let value = [2, 4, 8, 16];
     ///
-    /// # assert_eq!(storage.can_push::<Vec<i32>>(), false);
-    /// if !storage.can_push::<Vec<i32>>() {
-    ///     storage.resize(storage.get_capacity() + size_of_val(&value));
-    ///
-    ///     // ...update old pointers...
+    /// # assert_eq!(storage.can_push_t::<Vec<i32>>(), false);
+    /// if !storage.can_push_t::<Vec<i32>>() {
+    ///     storage.grow_to(storage.capacity() + size_of_val(&value));
+    ///     // update pointers...
     /// }
     ///
     /// let stored_value =
     ///   storage.push(value).expect("unable to store after growing the container");
     /// ```
-    pub fn can_push<T>(&self) -> bool {
+    pub fn can_push_t<T>(&self) -> bool {
         let layout = Layout::new::<T>();
         self.inner.tracker.peek_next(layout).is_some()
     }
 
     /// Returns `true` if the provided `value` can be stored without growing the
     /// container.
-    pub fn can_push_value<T>(&self, value: &T) -> bool {
-        let layout = Layout::for_value(value);
+    ///
+    /// `value` can either be a [`Layout`] or a reference to a `Sized` value.
+    pub fn can_push<T>(&self, value: impl HasLayout) -> bool {
+        let layout = value.layout();
         self.inner.tracker.peek_next(layout).is_some()
     }
 
-    /// Returns `true` if the provided `layout` can be stored without growing
-    /// the container.
-    pub fn can_push_layout(&self, layout: Layout) -> bool {
-        self.inner.tracker.peek_next(layout).is_some()
-    }
-
-    /// Resizes the memory container to the specified `new_capacity`, optionally
-    /// returning the new base address and size of the stored items.
+    /// Grows the memory container to the specified `new_capacity`, optionally
+    /// returning the new base address and size of the underlying memory.
     ///
     /// If the base address of the memory block stays the same the returned
-    /// value is `None`. If `new_capacity` is 0, the retuned pointer will be an
-    /// invalid pointer with container alignment.
+    /// value is `None`.
     ///
     /// # Panics
     ///
     /// Panics if the new capacity exceeds `isize::MAX` or the allocator
     /// operation fails.
-    pub fn resize(&mut self, new_capacity: usize) -> Option<BasePtr> {
-        match self.try_resize(new_capacity) {
+    pub fn grow_to(&mut self, new_capacity: usize) -> Option<BasePtr> {
+        match self.try_grow_to(new_capacity) {
             Ok(it) => it,
             Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
             Err(MemoryError::Allocator(_)) => panic!("allocator error"),
@@ -214,46 +225,44 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     }
 
     /// Tries resizing the memory container to the specified `new_capacity`,
-    /// optionally returning the new base address and size of the stored items,
-    /// or a [`MemoryError`] if the new capacity exceeds `isize::MAX` or the
-    /// allocator can't allocate required memory.
+    /// optionally returning the new base address and size of the underlying
+    /// memory, or a [`MemoryError`] if the new capacity exceeds `isize::MAX` or
+    /// the allocator can't allocate required memory.
     ///
     /// If the base address of the memory block stays the same the returned
-    /// value is `None`. If `new_capacity` is 0, the retuned pointer will be an
-    /// invalid pointer with container alignment.
+    /// value is `None`.
     ///
     /// Make sure to update any previously created pointers.
-    pub fn try_resize(&mut self, new_capacity: usize) -> Result<Option<BasePtr>, MemoryError> {
+    pub fn try_grow_to(&mut self, new_capacity: usize) -> Result<Option<BasePtr>, MemoryError> {
         let old_capacity = self.inner.capacity;
-        let new_capacity = core::cmp::max(self.inner.tracker.min_len(), new_capacity);
+        let new_capacity = core::cmp::max(old_capacity, new_capacity);
         if new_capacity == old_capacity {
             return Ok(None);
         }
 
-        self.inner
-            .tracker
-            .resize(new_capacity)
-            .expect("unable to resize allocation tracker");
-        let old_layout = self.get_layout();
+        self.inner.tracker.grow(new_capacity);
+
+        let old_layout = self.layout();
         let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)?;
+
         let prev_base = self.inner.base.0;
-        self.inner.base.0 = unsafe {
-            if new_capacity > old_capacity {
-                self.inner.alloc.grow(prev_base, old_layout, new_layout)?
-            } else {
-                self.inner.alloc.shrink(prev_base, old_layout, new_layout)?
-            }
-        };
+        self.inner.base.0 = unsafe { self.inner.alloc.grow(prev_base, old_layout, new_layout)? };
+
         self.inner.capacity = new_capacity;
 
         Ok(if self.inner.base.0 != prev_base {
-            self.inner.base.0
+            Some(unsafe {
+                // SAFETY: new_capacity must be > 0, because it's max of
+                // old_capacity and passed argument, if both are 0 we return
+                // early
+                self.inner.base.0.unwrap_unchecked()
+            })
         } else {
             None
         })
     }
 
-    /// Grows the underlying memory by specified `additional` bytes.
+    /// Grows the underlying memory by `additional` number of bytes.
     ///
     /// After calling this function, new capacity will be equal to:
     /// `self.get_capacity() + additional`.
@@ -273,7 +282,7 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
         }
     }
 
-    /// Tries grows the underlying memory by specified `additional` bytes,
+    /// Tries growing the underlying memory by `additional` number of bytes,
     /// returning a [`MemoryError`] error if the new capacity exceeds
     /// `isize::MAX` or the allocator can't allocate required memory.
     ///
@@ -287,13 +296,13 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
             return Ok(None);
         }
 
-        let old_capacity = self.get_capacity();
+        let old_capacity = self.capacity();
         let new_capacity = old_capacity.saturating_add(additional);
 
         self.inner.tracker.grow(new_capacity);
-        let old_layout = self.get_layout();
+        let old_layout = self.layout();
         let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)?;
-        let prev_base = self.get_base();
+        let prev_base = self.base();
 
         let new_base = unsafe {
             self.inner
@@ -325,7 +334,7 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     /// Panics if attempting to grow the container to a capacity larger than
     /// `isize::MAX` or the allocator can't allocate required memory.
     #[inline]
-    pub fn reserve_layout(&mut self, layout: Layout) -> Option<BasePtr> {
+    pub fn reserve_layout(&mut self, layout: impl HasLayout) -> Option<BasePtr> {
         match self.try_reserve_layout(layout) {
             Ok(it) => it,
             Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
@@ -341,12 +350,16 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     /// `self.get_capacity() + padding + size_of::<V>()`.
     ///
     /// Make sure to update any previously created pointers.
-    pub fn try_reserve_layout(&mut self, layout: Layout) -> Result<Option<BasePtr>, MemoryError> {
-        match self.get_base() {
+    pub fn try_reserve_layout(
+        &mut self,
+        layout: impl HasLayout,
+    ) -> Result<Option<BasePtr>, MemoryError> {
+        let layout = layout.layout();
+        match self.base() {
             Some(base) => {
                 let last = unsafe { (base.as_ptr() as *mut u8).add(self.inner.tracker.len()) };
                 let align_offset = last.align_offset(layout.align());
-                self.try_reserve(self.get_capacity() + align_offset + layout.size())
+                self.try_reserve(self.capacity() + align_offset + layout.size())
             }
             None => {
                 self.inner.tracker.grow(layout.size());
@@ -378,7 +391,7 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
             .shrink(new_capacity)
             .expect("unable to shrink the allocation tracker");
         let prev_base = self.inner.base.0;
-        let old_layout = self.get_layout();
+        let old_layout = self.layout();
         if new_capacity == old_layout.size() {
             return prev_base;
         }
@@ -392,7 +405,7 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
         let new_base = unsafe {
             self.inner
                 .alloc
-                .shrink(prev_base, self.get_layout(), new_layout)
+                .shrink(prev_base, self.layout(), new_layout)
         }
         .expect("unable to shrink the container");
         self.inner.base.0 = new_base;
@@ -408,7 +421,7 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
             Some(it) => it,
             None => return prev_base,
         };
-        let old_layout = self.get_layout();
+        let old_layout = self.layout();
         let new_layout = unsafe {
             // SAFETY: Previous layout was valid and had valid alignment,
             // new one is smaller with same alignment so it must be
@@ -490,8 +503,8 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     /// let mut storage = UnsafeContiguousMemory::with_capacity(128);
     /// let initial_position = storage.push(278u32).unwrap();
     ///
-    /// let base_addr = storage.get_base().unwrap().as_ptr() as *const u8;
-    /// storage.resize(512);
+    /// let base_addr = storage.base_ptr();
+    /// storage.grow_to(512);
     ///
     /// let new_position: *mut u32 = storage.assume_stored(
     ///     initial_position as usize - base_addr as usize
@@ -516,13 +529,13 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     where
         A: Clone,
     {
-        let current_layout = self.get_layout();
+        let current_layout = self.layout();
         let result = Self::with_layout_and_alloc(current_layout, self.inner.alloc.clone());
-        match self.get_base() {
+        match self.base() {
             Some(base) => unsafe {
                 core::ptr::copy_nonoverlapping(
                     base.as_ptr() as *const (),
-                    result.get_base().unwrap_unchecked().as_ptr() as *mut (),
+                    result.base().unwrap_unchecked().as_ptr() as *mut (),
                     current_layout.size(),
                 );
             },
@@ -615,7 +628,7 @@ impl<A: MemoryManager> UnsafeContiguousMemory<A> {
     /// [default implementation](crate::ContiguousMemory::forget).
     pub fn forget(self) -> (BaseAddress, Layout) {
         let base = self.inner.base.0;
-        let layout = self.get_layout();
+        let layout = self.layout();
         core::mem::forget(self);
         (base, layout)
     }
@@ -633,7 +646,7 @@ where
     }
 }
 
-impl<A: MemoryManager + Clone> Clone for UnsafeContiguousMemory<A> {
+impl<A: ManageMemory + Clone> Clone for UnsafeContiguousMemory<A> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),

@@ -1,6 +1,6 @@
 #![doc(hidden)]
 
-use core::{alloc::Layout, cmp::Ordering};
+use core::alloc::Layout;
 
 #[cfg(feature = "no_std")]
 use crate::types::{vec, Vec};
@@ -26,6 +26,10 @@ impl AllocationTracker {
     /// Returns the total memory size being tracked.
     pub fn len(&self) -> usize {
         self.size
+    }
+
+    pub fn count_free(&self) -> usize {
+        self.unused.iter().fold(0, |acc, it| acc + it.len())
     }
 
     /// Checks if there is no empty space left in the tracked region.
@@ -85,19 +89,6 @@ impl AllocationTracker {
         Ok(())
     }
 
-    /// Tries resizing the available memory range represented by this structure
-    /// to provided `new_size`, or returns
-    /// [`AllocationTrackerError::Unshrinkable`] error if the represented memory
-    /// range cannot be shrunk enough to fit the desired size.
-    pub fn resize(&mut self, new_size: usize) -> Result<(), AllocationTrackerError> {
-        match new_size.cmp(&self.size) {
-            Ordering::Equal => {}
-            Ordering::Less => self.shrink(new_size)?,
-            Ordering::Greater => self.grow(new_size),
-        }
-        Ok(())
-    }
-
     pub fn min_len(&self) -> usize {
         match self.unused.last() {
             Some(it) if it.1 == self.size => self.size - it.len(),
@@ -126,6 +117,9 @@ impl AllocationTracker {
     /// If the `layout` cannot be safely stored within any free segments of the
     /// represented memory region, `None` is returned instead.
     pub fn peek_next(&self, layout: Layout) -> Option<ByteRange> {
+        if layout.size() == 0 {
+            return Some(ByteRange::new(0, 0));
+        }
         if layout.size() > self.size {
             return None;
         }
@@ -166,6 +160,9 @@ impl AllocationTracker {
     /// - [`AllocationTrackerError::AlreadyUsed`]: If the provided region isn't
     ///   free.
     pub fn take(&mut self, region: ByteRange) -> Result<(), AllocationTrackerError> {
+        if region.len() == 0 {
+            return Ok(());
+        }
         if self.whole_range().contains(region) {
             std::panic::panic_any(AllocationTrackerError::NotContained);
         }
@@ -208,7 +205,9 @@ impl AllocationTracker {
             Some(it) => (it.as_ptr() as *mut u8) as usize,
             None => return Err(AllocationTrackerError::NoFreeMemory),
         };
-        if layout.size() > self.size {
+        if layout.size() == 0 {
+            return Ok(ByteRange::new(0, 0));
+        } else if layout.size() > self.size {
             return Err(AllocationTrackerError::NoFreeMemory);
         }
 
@@ -260,6 +259,9 @@ impl AllocationTracker {
     /// - [`AllocationTrackerError::DoubleFree`] error if the provided region is
     ///   
     pub fn release(&mut self, region: ByteRange) -> Result<(), AllocationTrackerError> {
+        if region.len() == 0 {
+            return Ok(());
+        }
         #[cfg(debug_assertions)]
         if !self.whole_range().contains(region) {
             return Err(AllocationTrackerError::NotContained);
@@ -317,17 +319,6 @@ mod tests {
         assert_eq!(tracker.len(), 1024);
         assert_eq!(tracker.is_empty(), false);
         assert_eq!(tracker.whole_range(), ByteRange(0, 1024));
-    }
-
-    #[test]
-    fn resize_allocation_tracker() {
-        let mut tracker = AllocationTracker::new(1024);
-
-        tracker.resize(512).unwrap();
-        assert_eq!(tracker.len(), 512);
-
-        tracker.resize(2048).unwrap();
-        assert_eq!(tracker.len(), 2048);
     }
 
     #[test]

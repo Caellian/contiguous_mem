@@ -167,6 +167,7 @@ pub trait RefSizeReq: Sized {}
 #[cfg(not(feature = "ptr_metadata"))]
 impl<T: Sized> RefSizeReq for T {}
 
+use core::alloc::Layout;
 #[cfg(feature = "ptr_metadata")]
 pub use core::marker::Unsize;
 #[cfg(feature = "ptr_metadata")]
@@ -201,4 +202,25 @@ pub(crate) const fn is_layout_valid(size: usize, align: usize) -> bool {
         return false;
     };
     return size <= isize::MAX as usize - (align - 1);
+}
+
+/// Trait that unifies passing either a [`Layout`] directly or a `&T` where
+/// `T: Sized` as an argument to a function which requires a type layout.
+pub trait HasLayout {
+    /// Returns a layout of the reference or a copy of the layout directly.
+    fn layout(&self) -> Layout;
+}
+
+impl HasLayout for Layout {
+    #[inline]
+    fn layout(&self) -> Layout {
+        *self
+    }
+}
+
+impl<T> HasLayout for &T {
+    #[inline]
+    fn layout(&self) -> Layout {
+        Layout::new::<T>()
+    }
 }

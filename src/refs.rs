@@ -17,14 +17,14 @@ use crate::{
     common::{ImplDefault, ImplDetails, StorageDetails},
     error::RegionBorrowError,
     range::ByteRange,
-    raw::MemoryManager,
+    raw::ManageMemory,
     types::*,
 };
 
 /// A synchronized (thread-safe) reference to `T` data stored in a
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemory) structure.
 #[cfg(feature = "sync_impl")]
-pub struct SyncContiguousEntryRef<T: ?Sized, A: MemoryManager> {
+pub struct SyncContiguousEntryRef<T: ?Sized, A: ManageMemory> {
     pub(crate) inner: Arc<ReferenceState<T, ImplConcurrent, A>>,
     #[cfg(feature = "ptr_metadata")]
     pub(crate) metadata: <T as Pointee>::Metadata,
@@ -37,7 +37,7 @@ pub struct SyncContiguousEntryRef<T: ?Sized, A: MemoryManager> {
 pub type SCERef<T, A> = SyncContiguousEntryRef<T, A>;
 
 #[cfg(feature = "sync_impl")]
-impl<T: ?Sized, A: MemoryManager> SyncContiguousEntryRef<T, A> {
+impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
     /// Returns a byte range within container memory this reference points to.
     pub fn range(&self) -> ByteRange {
         self.inner.range
@@ -298,7 +298,7 @@ impl<T: ?Sized, A: MemoryManager> SyncContiguousEntryRef<T, A> {
 }
 
 #[cfg(feature = "sync_impl")]
-impl<T: ?Sized, A: MemoryManager> Clone for SyncContiguousEntryRef<T, A> {
+impl<T: ?Sized, A: ManageMemory> Clone for SyncContiguousEntryRef<T, A> {
     fn clone(&self) -> Self {
         SyncContiguousEntryRef {
             inner: self.inner.clone(),
@@ -321,7 +321,7 @@ impl<T: ?Sized> core::fmt::Debug for SyncContiguousEntryRef<T> {
 
 /// A thread-unsafe reference to `T` data stored in
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemory) structure.
-pub struct ContiguousEntryRef<T: ?Sized, A: MemoryManager> {
+pub struct ContiguousEntryRef<T: ?Sized, A: ManageMemory> {
     pub(crate) inner: Rc<ReferenceState<T, ImplDefault, A>>,
     #[cfg(feature = "ptr_metadata")]
     pub(crate) metadata: <T as Pointee>::Metadata,
@@ -332,7 +332,7 @@ pub struct ContiguousEntryRef<T: ?Sized, A: MemoryManager> {
 /// A shorter type name for [`ContiguousEntryRef`].
 pub type CERef<T, A> = ContiguousEntryRef<T, A>;
 
-impl<T: ?Sized, A: MemoryManager> ContiguousEntryRef<T, A> {
+impl<T: ?Sized, A: ManageMemory> ContiguousEntryRef<T, A> {
     /// Returns a byte range within container memory this reference points to.
     pub fn range(&self) -> ByteRange {
         self.inner.range
@@ -557,7 +557,7 @@ impl<T: ?Sized, A: MemoryManager> ContiguousEntryRef<T, A> {
     }
 }
 
-impl<T: ?Sized, A: MemoryManager> Clone for ContiguousEntryRef<T, A> {
+impl<T: ?Sized, A: ManageMemory> Clone for ContiguousEntryRef<T, A> {
     fn clone(&self) -> Self {
         ContiguousEntryRef {
             inner: self.inner.clone(),
@@ -579,12 +579,12 @@ impl<T: ?Sized> core::fmt::Debug for ContiguousEntryRef<T> {
 }
 
 pub(crate) mod sealed {
-    use crate::raw::MemoryManager;
+    use crate::raw::ManageMemory;
 
     use super::*;
 
     /// Internal state of [`ContiguousEntryRef`] and [`SyncContiguousEntryRef`].
-    pub struct ReferenceState<T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> {
+    pub struct ReferenceState<T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> {
         pub state: Impl::StorageState<A>,
         pub range: ByteRange,
         pub borrow_kind: Impl::BorrowLock,
@@ -607,7 +607,7 @@ pub(crate) mod sealed {
         }
     }
 
-    impl<T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Drop for ReferenceState<T, Impl, A> {
+    impl<T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Drop for ReferenceState<T, Impl, A> {
         fn drop(&mut self) {
             let base = Impl::get_base(&Impl::deref_state(&self.state).base);
             let tracker = Impl::get_allocation_tracker(&mut self.state);
@@ -634,7 +634,7 @@ use sealed::*;
 /// A smart reference wrapper responsible for tracking and managing a flag
 /// that indicates whether the memory segment is actively being written to.
 #[cfg_attr(feature = "debug", derive(Debug))]
-pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> {
+pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> {
     state: Impl::RefState<T>,
     #[allow(unused)]
     #[cfg(feature = "sync_impl")]
@@ -642,7 +642,7 @@ pub struct MemoryWriteGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManage
     value: &'a mut T,
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Deref
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Deref
     for MemoryWriteGuard<'a, T, Impl, A>
 {
     type Target = T;
@@ -652,7 +652,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Deref
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> DerefMut
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> DerefMut
     for MemoryWriteGuard<'a, T, Impl, A>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -660,7 +660,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> DerefMut
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Drop
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Drop
     for MemoryWriteGuard<'a, T, Impl, A>
 {
     fn drop(&mut self) {
@@ -671,7 +671,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Drop
 /// A smart reference wrapper responsible for tracking and managing a flag
 /// that indicates whether the memory segment is actively being read from.
 #[cfg_attr(feature = "debug", derive(Debug))]
-pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> {
+pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> {
     state: Impl::RefState<T>,
     #[allow(unused)]
     #[cfg(feature = "sync_impl")]
@@ -679,7 +679,7 @@ pub struct MemoryReadGuard<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager
     value: &'a T,
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Deref
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Deref
     for MemoryReadGuard<'a, T, Impl, A>
 {
     type Target = T;
@@ -689,7 +689,7 @@ impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Deref
     }
 }
 
-impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: MemoryManager> Drop
+impl<'a, T: ?Sized, Impl: ImplDetails<A>, A: ManageMemory> Drop
     for MemoryReadGuard<'a, T, Impl, A>
 {
     fn drop(&mut self) {
