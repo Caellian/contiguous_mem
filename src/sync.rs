@@ -2,9 +2,7 @@ use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, ManuallyDrop};
 
-use crate::error::{
-    AllocationTrackerError, LockTarget, LockingError, MemoryError, SyncMemoryError,
-};
+use crate::error::{LockTarget, LockingError, MemoryError, NoFreeMemoryError, SyncMemoryError};
 use crate::range::ByteRange;
 use crate::raw::*;
 use crate::refs::{sealed::ReferenceState, SyncContiguousEntryRef};
@@ -461,10 +459,7 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
         if new_capacity == old_layout.size() {
             return Ok(*base);
         }
-
-        tracker
-            .shrink(new_capacity)
-            .expect("unable to shrink the allocation tracker");
+        tracker.shrink(new_capacity);
 
         let new_layout = unsafe {
             // SAFETY: Previous layout was valid and had valid alignment,
@@ -598,7 +593,7 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
                     unsafe { core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size()) }
                     break taken;
                 }
-                Err(AllocationTrackerError::NoFreeMemory) => {
+                Err(NoFreeMemoryError) => {
                     let mut base_guard = self.inner.base.write_named(LockTarget::BaseAddress)?;
                     match base {
                         Some(prev_base) => {
@@ -636,10 +631,6 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
                         }
                     }
                 }
-                Err(other) => unreachable!(
-                    "reached unexpected error while looking for next region to store data: {:?}",
-                    other
-                ),
             }
         };
 
@@ -780,16 +771,10 @@ impl<A: ManageMemory> SyncContiguousMemory<A> {
     /// then trying to access previously stored data from overlapping regions
     /// will cause undefined behavior.
     pub unsafe fn clear_region(&mut self, region: ByteRange) -> Result<(), LockingError> {
-        #[allow(unused_variables)]
-        let result = self
-            .inner
+        self.inner
             .tracker
             .lock_named(LockTarget::AllocationTracker)?
             .release(region);
-
-        #[cfg(debug_assertions)]
-        result.unwrap();
-
         Ok(())
     }
 

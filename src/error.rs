@@ -64,58 +64,6 @@ impl From<core::alloc::AllocError> for MemoryError {
     }
 }
 
-/// A list of errors that can be returned by allocation tracker.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum AllocationTrackerError {
-    /// No free segments with required length remaining.
-    NoFreeMemory,
-    /// Attempted to occupy a memory region that is already marked as taken.
-    AlreadyUsed,
-    /// Attempted to operate on a memory region that is not contained within the
-    /// allocation tracker.
-    NotContained,
-    /// Attempted to free memory that has already been deallocated.
-    DoubleFree,
-    /// The allocation tracker does not allow shrinking to the expected size due
-    /// to previously stored data.
-    Unshrinkable {
-        /// The minimum required size to house currently stored data.
-        required_size: usize,
-    },
-}
-
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
-impl Display for AllocationTrackerError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            AllocationTrackerError::NoFreeMemory => {
-                write!(f, "No free segments of required length")
-            }
-            AllocationTrackerError::NotContained => {
-                write!(f, "Attempted to mark a memory region that isn't contained")
-            }
-            AllocationTrackerError::AlreadyUsed => write!(
-                f,
-                "Attempted to take a memory region that is already marked as occupied"
-            ),
-            AllocationTrackerError::DoubleFree => write!(
-                f,
-                "Attempted to free a memory region that is already marked as free"
-            ),
-            AllocationTrackerError::Unshrinkable {
-                required_size: min_required,
-            } => write!(
-                f,
-                "Cannot shrink memory regions; minimum required space: {} bytes",
-                min_required
-            ),
-        }
-    }
-}
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
-impl Error for AllocationTrackerError {}
-
 /// Error indicating that the container is full.
 #[derive(Debug)]
 pub struct NoFreeMemoryError;

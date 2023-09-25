@@ -4,7 +4,7 @@ use core::alloc::Layout;
 
 #[cfg(feature = "no_std")]
 use crate::types::{vec, Vec};
-use crate::{error::AllocationTrackerError, range::ByteRange, raw::BaseAddress};
+use crate::{error::NoFreeMemoryError, range::ByteRange, raw::BaseAddress};
 
 /// A structure that keeps track of unused regions of memory within provided
 /// bounds.
@@ -67,26 +67,24 @@ impl AllocationTracker {
     }
 
     /// Tries shrinking the available memory range represented by this structure
-    /// to provided `new_size`, or returns
-    /// [`AllocationTrackerError::Unshrinkable`] error if the represented memory
-    /// range cannot be shrunk enough to fit the desired size.
-    pub fn shrink(&mut self, new_size: usize) -> Result<(), AllocationTrackerError> {
+    /// to provided `new_size`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the represented memory range cannot be shrunk enough to fit
+    /// the desired size.
+    pub fn shrink(&mut self, new_size: usize) {
         let last = self
             .unused
             .last_mut()
-            .ok_or(AllocationTrackerError::Unshrinkable {
-                required_size: self.size,
-            })?;
+            .expect("can't shrink allocation tracker");
 
         let reduction = self.size - new_size;
         if last.len() < reduction {
-            return Err(AllocationTrackerError::Unshrinkable {
-                required_size: self.size - last.len(),
-            });
+            panic!("can't shrink allocation tracker to desired size")
         }
         last.1 -= reduction;
         self.size = new_size;
-        Ok(())
     }
 
     pub fn min_len(&self) -> usize {
@@ -136,7 +134,7 @@ impl AllocationTracker {
     /// Returns either a start position of a free byte range at the end of the
     /// tracker, or total size if end is occupied.
     #[inline]
-    pub(crate) fn last_offset(&self) -> usize {
+    pub fn last_offset(&self) -> usize {
         match self.unused.last() {
             Some(it) if it.1 == self.size => it.0,
             _ => self.size,
@@ -145,49 +143,11 @@ impl AllocationTracker {
 
     /// Returns number of tailing free bytes in the tracker
     #[inline]
-    pub(crate) fn tailing_free_bytes(&self) -> usize {
+    pub fn tailing_free_bytes(&self) -> usize {
         match self.unused.last() {
             Some(it) if it.1 == self.size => it.len(),
             _ => 0,
         }
-    }
-
-    /// Tries marking the provided memory `region` as not free, returning one
-    /// of the following errors if that's not possible:
-    ///
-    /// - [`AllocationTrackerError::NotContained`]: If the provided region falls
-    ///   outside of the memory tracked by the `AllocationTracker`.
-    /// - [`AllocationTrackerError::AlreadyUsed`]: If the provided region isn't
-    ///   free.
-    pub fn take(&mut self, region: ByteRange) -> Result<(), AllocationTrackerError> {
-        if region.len() == 0 {
-            return Ok(());
-        }
-        if self.whole_range().contains(region) {
-            std::panic::panic_any(AllocationTrackerError::NotContained);
-        }
-
-        let (i, found) = self
-            .unused
-            .iter()
-            .enumerate()
-            .find(|(_, it)| it.contains(region))
-            .ok_or(AllocationTrackerError::AlreadyUsed)?;
-
-        let (left, right) = found.difference_unchecked(region);
-
-        if !left.is_empty() {
-            self.unused[i] = left;
-            if !right.is_empty() {
-                self.unused.insert(i + 1, right);
-            }
-        } else if !right.is_empty() {
-            self.unused[i] = right;
-        } else {
-            self.unused.remove(i);
-        }
-
-        Ok(())
     }
 
     /// Takes the next available memory region that can hold the provided
@@ -200,15 +160,15 @@ impl AllocationTracker {
         &mut self,
         base_address: BaseAddress,
         layout: Layout,
-    ) -> Result<ByteRange, AllocationTrackerError> {
+    ) -> Result<ByteRange, NoFreeMemoryError> {
         let base_address = match base_address {
             Some(it) => (it.as_ptr() as *mut u8) as usize,
-            None => return Err(AllocationTrackerError::NoFreeMemory),
+            None => return Err(NoFreeMemoryError),
         };
         if layout.size() == 0 {
             return Ok(ByteRange::new(0, 0));
         } else if layout.size() > self.size {
-            return Err(AllocationTrackerError::NoFreeMemory);
+            return Err(NoFreeMemoryError);
         }
 
         let (i, available) = self
@@ -227,7 +187,7 @@ impl AllocationTracker {
 
                 aligned.len() >= layout.size()
             })
-            .ok_or(AllocationTrackerError::NoFreeMemory)?;
+            .ok_or(NoFreeMemoryError)?;
 
         let taken = available.aligned(layout.align()).cap_size(layout.size());
 
@@ -249,22 +209,19 @@ impl AllocationTracker {
 
     /// Tries marking the provided memory `region` as free.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// In _release mode_ this function never fails.
-    ///
-    /// In _debug mode_ this function can return:
-    /// - [`AllocationTrackerError::NotContained`] error if the provided region
-    ///   falls outside of the memory tracked by the `AllocationTracker`.
-    /// - [`AllocationTrackerError::DoubleFree`] error if the provided region is
-    ///   
-    pub fn release(&mut self, region: ByteRange) -> Result<(), AllocationTrackerError> {
+    /// This function panics in debug mode if:
+    /// - the provided region falls outside of the memory tracked by the
+    ///   `AllocationTracker`, or
+    /// - the provided region is in part or whole already marked as free.
+    pub fn release(&mut self, region: ByteRange) {
         if region.len() == 0 {
-            return Ok(());
+            return;
         }
         #[cfg(debug_assertions)]
         if !self.whole_range().contains(region) {
-            return Err(AllocationTrackerError::NotContained);
+            panic!("{} not contained in allocation tracker", region);
         }
 
         if let Some(found) = self
@@ -274,7 +231,7 @@ impl AllocationTracker {
         {
             #[cfg(debug_assertions)]
             if found.overlaps(region) {
-                return Err(AllocationTrackerError::DoubleFree);
+                panic!("double free in allocation tracker");
             }
             found.apply_union_unchecked(region);
         } else if let Some((i, _)) = self.unused.iter().enumerate().find(|it| it.0 > region.0) {
@@ -282,8 +239,6 @@ impl AllocationTracker {
         } else {
             self.unused.push(region);
         }
-
-        Ok(())
     }
 
     #[inline]
@@ -330,9 +285,7 @@ mod tests {
             .unwrap();
         assert_eq!(range, ByteRange(0, 32));
 
-        tracker
-            .release(range)
-            .expect("expected AllocationTracker to have the provided range marked as taken");
+        tracker.release(range);
         assert_eq!(tracker.is_empty(), false);
     }
 

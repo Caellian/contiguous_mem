@@ -51,7 +51,7 @@ use core::{
 };
 
 use common::*;
-use error::{AllocationTrackerError, MemoryError};
+use error::{MemoryError, NoFreeMemoryError};
 use range::ByteRange;
 use raw::*;
 use refs::sealed::{BorrowState, ReferenceState};
@@ -684,28 +684,27 @@ impl<A: ManageMemory> ContiguousMemory<A> {
     pub fn shrink_to(&mut self, new_capacity: usize) -> BaseAddress {
         let mut tracker = self.inner.tracker.borrow_mut();
         let new_capacity = core::cmp::max(tracker.min_len(), new_capacity);
-
-        tracker
-            .shrink(new_capacity)
-            .expect("unable to shrink the allocation tracker");
+        tracker.shrink(new_capacity);
         let prev_base = self.inner.base.get();
+
         let old_layout = self.layout();
         if new_capacity == old_layout.size() {
             return prev_base;
         }
-
         let new_layout = unsafe {
             // SAFETY: Previous layout was valid and had valid alignment,
             // new one is smaller with same alignment so it must be
             // valid as well.
             Layout::from_size_align_unchecked(new_capacity, old_layout.align())
         };
+
         let new_base = unsafe {
             self.inner
                 .alloc
                 .shrink(prev_base, self.layout(), new_layout)
         }
         .expect("unable to shrink the container");
+
         self.inner.base.set(new_base);
         self.inner.capacity.set(new_capacity);
         new_base
@@ -829,7 +828,7 @@ impl<A: ManageMemory> ContiguousMemory<A> {
                     }
                     break taken;
                 }
-                Err(AllocationTrackerError::NoFreeMemory) => match base {
+                Err(NoFreeMemoryError) => match base {
                     Some(prev_base) => {
                         let curr_capacity = self.capacity();
 
@@ -867,10 +866,6 @@ impl<A: ManageMemory> ContiguousMemory<A> {
                         self.inner.capacity.set(layout.size());
                     }
                 },
-                Err(other) => unreachable!(
-                    "reached unexpected error while looking for next region to store data: {:?}",
-                    other
-                ),
             }
         };
 
@@ -995,11 +990,7 @@ impl<A: ManageMemory> ContiguousMemory<A> {
     /// container and then trying to access previously stored data from
     /// overlapping regions will cause undefined behavior.
     pub unsafe fn clear_region(&mut self, region: ByteRange) {
-        #[allow(unused_variables)]
-        let result = self.inner.tracker.borrow_mut().release(region);
-
-        #[cfg(debug_assertions)]
-        result.expect("cleared region falls outside of the tracked memory");
+        self.inner.tracker.borrow_mut().release(region);
     }
 
     /// Forgets this container without dropping it and returns its base address

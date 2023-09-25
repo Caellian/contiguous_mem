@@ -385,31 +385,30 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// region.
     pub fn shrink_to(&mut self, new_capacity: usize) -> BaseAddress {
         let new_capacity = core::cmp::max(self.inner.tracker.min_len(), new_capacity);
-
-        self.inner
-            .tracker
-            .shrink(new_capacity)
-            .expect("unable to shrink the allocation tracker");
+        self.inner.tracker.shrink(new_capacity);
         let prev_base = self.inner.base.0;
+
         let old_layout = self.layout();
         if new_capacity == old_layout.size() {
             return prev_base;
         }
-
         let new_layout = unsafe {
             // SAFETY: Previous layout was valid and had valid alignment,
             // new one is smaller with same alignment so it must be
             // valid as well.
             Layout::from_size_align_unchecked(new_capacity, old_layout.align())
         };
+
         let new_base = unsafe {
             self.inner
                 .alloc
                 .shrink(prev_base, self.layout(), new_layout)
         }
         .expect("unable to shrink the container");
+
         self.inner.base.0 = new_base;
         self.inner.capacity = new_capacity;
+
         new_base
     }
 
@@ -560,16 +559,7 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
         match self.inner.base.0 {
             Some(base) => {
                 let pos: usize = position.sub(base.as_ptr() as *const u8 as usize) as usize;
-                #[cfg(debug_assertions)]
-                self.inner
-                    .tracker
-                    .release(ByteRange(pos, pos + size))
-                    .unwrap();
-                #[cfg(not(debug_assertions))]
-                self.inner
-                    .tracker
-                    .release(ByteRange(pos, pos + size))
-                    .unwrap_unchecked();
+                self.inner.tracker.release(ByteRange(pos, pos + size));
                 core::ptr::drop_in_place(position);
             }
             None => {}
@@ -614,11 +604,7 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// then trying to access previously stored data from overlapping regions
     /// will cause undefined behavior.
     pub unsafe fn clear_region(&mut self, region: ByteRange) {
-        #[allow(unused_variables)]
-        let result = self.inner.tracker.release(region);
-
-        #[cfg(debug_assertions)]
-        result.expect("cleared region falls outside of the tracked memory");
+        self.inner.tracker.release(region);
     }
 
     /// Forgets this container without dropping it and returns its base address
