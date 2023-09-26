@@ -1,19 +1,16 @@
+#![allow(unused)]
+
 use core::{
     cell::{Cell, RefCell},
     ptr::NonNull,
 };
 
-use crate::{error::MemoryError, tracker::AllocationTracker};
+use crate::{
+    error::MemoryError,
+    memory::{DefaultMemoryManager, ManageMemory, SegmentTracker},
+};
 
 use super::*;
-
-#[cfg(feature = "no_std")]
-pub use alloc::alloc;
-#[cfg(not(feature = "no_std"))]
-use std::alloc;
-
-#[cfg(feature = "allocator_api")]
-use alloc::Allocator;
 
 /// Pointer to allocated slice of memory.
 pub type BasePtr = NonNull<[u8]>;
@@ -24,6 +21,13 @@ pub type BaseAddress = Option<BasePtr>;
 
 pub(crate) const unsafe fn null_base(align: usize) -> BasePtr {
     NonNull::new_unchecked(std::mem::transmute((align as *mut u8, 0usize)))
+}
+
+/// Returns a `usize` position of base address or panics if it's `None`.
+#[inline]
+pub(crate) fn base_addr_position(base: BaseAddress) -> usize {
+    base.map(|it| it.as_ptr() as *const u8 as usize)
+        .expect("base address missing")
 }
 
 #[inline]
@@ -37,215 +41,10 @@ pub(crate) unsafe fn base_addr_layout(base: BaseAddress, align: usize) -> Layout
     Layout::from_size_align_unchecked(base_addr_capacity(base), align)
 }
 
-/// Memory manager controls allocation and deallocation of underlying memory
-/// used by the container.
-///
-/// It also manages shrinking/growing of the container.
-///
-/// [`Layout`] arguments can have the size 0 and that _shouldn't_ cause a panic,
-/// implementations of the trait must ensure to return `None` as [`BaseAddress`]
-/// appropriately in those cases.
-///
-/// Default implementation is [`DefaultMemoryManager`].
-///
-/// If `allocator_api` feature is enabled, this trait is implemented for all
-/// [allocators](alloc::Allocator).
-pub trait ManageMemory {
-    /// Allocates a block of memory with size and alignment specified by
-    /// `layout` argument.
-    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError>;
-
-    /// Deallocates a block of memory of provided `layout` at the specified
-    /// `address`.
-    ///
-    /// # Safety
-    ///
-    /// See: [alloc::Allocator::deallocate]
-    unsafe fn deallocate(&self, address: BaseAddress, layout: Layout);
-
-    /// Shrinks the container underlying memory from `old_layout` size to
-    /// `new_layout`.
-    ///
-    /// Generally doesn't cause a move, but an implementation can choose to do
-    /// so.
-    ///
-    /// # Safety
-    ///
-    /// See: [alloc::Allocator::shrink]
-    unsafe fn shrink(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError>;
-
-    /// Grows the container underlying memory from `old_layout` size to
-    /// `new_layout`.
-    ///
-    /// # Safety
-    ///
-    /// See: [alloc::Allocator::grow]
-    unsafe fn grow(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError>;
-}
-
-/// Default [memory manager](ManageMemory) that uses the methods exposed by
-/// [`alloc`] module.
-#[derive(Clone, Copy)]
-pub struct DefaultMemoryManager;
-impl ManageMemory for DefaultMemoryManager {
-    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
-        if layout.size() == 0 {
-            Ok(None)
-        } else {
-            unsafe {
-                Ok(Some(NonNull::from(core::slice::from_raw_parts(
-                    alloc::alloc(layout),
-                    layout.size(),
-                ))))
-            }
-        }
-    }
-
-    unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
-        if let Some(it) = address {
-            alloc::dealloc(it.as_ptr() as *mut u8, layout);
-        }
-    }
-
-    unsafe fn shrink(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        match address {
-            Some(it) => Ok(if new_layout.size() > 0 {
-                Some(NonNull::from(core::slice::from_raw_parts(
-                    alloc::realloc(it.as_ptr() as *mut u8, old_layout, new_layout.size()),
-                    new_layout.size(),
-                )))
-            } else {
-                alloc::dealloc(it.as_ptr() as *mut u8, old_layout);
-                None
-            }),
-            None => Ok(None),
-        }
-    }
-
-    unsafe fn grow(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        match address {
-            Some(it) => Ok(Some(NonNull::from(core::slice::from_raw_parts(
-                alloc::realloc(it.as_ptr() as *mut u8, old_layout, new_layout.size()),
-                new_layout.size(),
-            )))),
-            None => Ok({
-                if new_layout.size() == 0 {
-                    None
-                } else {
-                    Some(NonNull::from(core::slice::from_raw_parts(
-                        alloc::alloc(new_layout),
-                        new_layout.size(),
-                    )))
-                }
-            }),
-        }
-    }
-}
-
-#[cfg(feature = "allocator_api")]
-impl<A: Allocator> ManageMemory for A {
-    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
-        if layout.size() == 0 {
-            Ok(None)
-        } else {
-            Allocator::allocate(self, layout)
-                .map(Some)
-                .map_err(MemoryError::from)
-        }
-    }
-
-    unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
-        if let Some(allocated) = address {
-            Allocator::deallocate(
-                self,
-                NonNull::new_unchecked(allocated.as_ptr() as *mut u8),
-                layout,
-            )
-        }
-    }
-
-    unsafe fn shrink(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        match address {
-            Some(it) => {
-                if new_layout.size() > 0 {
-                    Allocator::shrink(
-                        self,
-                        NonNull::new_unchecked(it.as_ptr() as *mut u8),
-                        old_layout,
-                        new_layout,
-                    )
-                    .map(Some)
-                    .map_err(MemoryError::from)
-                } else {
-                    Allocator::deallocate(
-                        self,
-                        NonNull::new_unchecked(it.as_ptr() as *mut u8),
-                        old_layout,
-                    );
-                    Ok(None)
-                }
-            }
-            None => Ok(None),
-        }
-    }
-
-    unsafe fn grow(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        match address {
-            Some(it) => Allocator::grow(
-                self,
-                NonNull::new_unchecked(it.as_ptr() as *mut u8),
-                old_layout,
-                new_layout,
-            )
-            .map(Some)
-            .map_err(MemoryError::from),
-            None => {
-                if new_layout.size() == 0 {
-                    Ok(None)
-                } else {
-                    Allocator::allocate(self, new_layout)
-                        .map(Some)
-                        .map_err(MemoryError::from)
-                }
-            }
-        }
-    }
-}
-
 pub struct MemoryState<Impl: ImplDetails<A>, A: ManageMemory> {
     pub base: BaseLocation<Impl, A>,
     pub alignment: usize,
-    pub tracker: Impl::AllocationTracker,
+    pub tracker: Impl::SegmentTracker,
     pub alloc: A,
 }
 
@@ -262,7 +61,7 @@ impl MemoryState<ImplDefault, DefaultMemoryManager> {
         Ok(Rc::new(MemoryState {
             base: BaseLocation(Cell::new(base)),
             alignment: layout.align(),
-            tracker: RefCell::new(AllocationTracker::new(layout.size())),
+            tracker: RefCell::new(SegmentTracker::new(layout.size())),
             alloc: DefaultMemoryManager,
         }))
     }
@@ -274,7 +73,7 @@ impl<A: ManageMemory> MemoryState<ImplDefault, A> {
         Ok(Rc::new(MemoryState {
             base: BaseLocation(Cell::new(base)),
             alignment: layout.align(),
-            tracker: RefCell::new(AllocationTracker::new(layout.size())),
+            tracker: RefCell::new(SegmentTracker::new(layout.size())),
             alloc,
         }))
     }
@@ -287,7 +86,7 @@ impl MemoryState<ImplConcurrent, DefaultMemoryManager> {
         Ok(Arc::new(MemoryState {
             base: BaseLocation(RwLock::new(base)),
             alignment: layout.align(),
-            tracker: Mutex::new(AllocationTracker::new(layout.size())),
+            tracker: Mutex::new(SegmentTracker::new(layout.size())),
             alloc: DefaultMemoryManager,
         }))
     }
@@ -299,7 +98,7 @@ impl<A: ManageMemory> MemoryState<ImplConcurrent, A> {
         Ok(Arc::new(MemoryState {
             base: BaseLocation(RwLock::new(base)),
             alignment: layout.align(),
-            tracker: Mutex::new(AllocationTracker::new(layout.size())),
+            tracker: Mutex::new(SegmentTracker::new(layout.size())),
             alloc,
         }))
     }
@@ -312,7 +111,7 @@ impl MemoryState<ImplUnsafe, DefaultMemoryManager> {
         Ok(MemoryState {
             base: BaseLocation(base),
             alignment: layout.align(),
-            tracker: AllocationTracker::new(layout.size()),
+            tracker: SegmentTracker::new(layout.size()),
             alloc: DefaultMemoryManager,
         })
     }
@@ -325,7 +124,7 @@ impl<A: ManageMemory> MemoryState<ImplUnsafe, A> {
         Ok(MemoryState {
             base: BaseLocation(base),
             alignment: layout.align(),
-            tracker: AllocationTracker::new(layout.size()),
+            tracker: SegmentTracker::new(layout.size()),
             alloc,
         })
     }
@@ -346,7 +145,7 @@ impl<A: ManageMemory + Clone> Clone for MemoryState<ImplUnsafe, A> {
 impl<A: ManageMemory, Impl: ImplDetails<A>> core::fmt::Debug for MemoryState<Impl, A>
 where
     BaseLocation<Impl, A>: core::fmt::Debug,
-    Impl::AllocationTracker: core::fmt::Debug,
+    Impl::SegmentTracker: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ContiguousMemoryState")

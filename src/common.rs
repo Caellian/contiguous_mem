@@ -14,11 +14,12 @@ use core::{
 };
 
 use crate::{
-    raw::{base_addr_layout, BaseAddress, ManageMemory},
+    memory::ManageMemory,
+    raw::{base_addr_layout, BaseAddress},
     types::*,
 };
 
-use crate::{range::ByteRange, refs::sealed::*, tracker::AllocationTracker, MemoryState};
+use crate::{memory::SegmentTracker, range::ByteRange, refs::sealed::*, MemoryState};
 
 #[cfg(feature = "sync_impl")]
 use crate::error::{LockTarget, LockingError};
@@ -28,9 +29,9 @@ use crate::error::{LockTarget, LockingError};
 pub trait ImplDetails<A: ManageMemory>: Sized {
     /// The type representing the base memory and allocation tracking.
     type Base;
-    /// The type representing the allocation tracker discrete type.
-    type AllocationTracker;
-    /// The type representing the allocation tracker reference type.
+    /// The type representing the segment tracker discrete type.
+    type SegmentTracker;
+    /// The type representing the segment tracker reference type.
     type ATGuard<'a>;
     /// The type representing result of accessing data that is locked in async
     /// context
@@ -55,8 +56,8 @@ pub trait ImplDetails<A: ManageMemory>: Sized {
 pub struct ImplDefault;
 impl<A: ManageMemory> ImplDetails<A> for ImplDefault {
     type Base = Cell<BaseAddress>;
-    type AllocationTracker = RefCell<AllocationTracker>;
-    type ATGuard<'a> = RefMut<'a, AllocationTracker>;
+    type SegmentTracker = RefCell<SegmentTracker>;
+    type ATGuard<'a> = RefMut<'a, SegmentTracker>;
     type LockResult<T> = T;
 
     #[inline]
@@ -88,8 +89,8 @@ pub struct ImplConcurrent;
 #[cfg(feature = "sync_impl")]
 impl<A: ManageMemory> ImplDetails<A> for ImplConcurrent {
     type Base = RwLock<BaseAddress>;
-    type AllocationTracker = Mutex<AllocationTracker>;
-    type ATGuard<'a> = MutexGuard<'a, AllocationTracker>;
+    type SegmentTracker = Mutex<SegmentTracker>;
+    type ATGuard<'a> = MutexGuard<'a, SegmentTracker>;
     type LockResult<T> = Result<T, LockingError>;
 
     #[inline]
@@ -128,8 +129,8 @@ pub struct ImplUnsafe;
 #[cfg(feature = "unsafe_impl")]
 impl<A: ManageMemory> ImplDetails<A> for ImplUnsafe {
     type Base = BaseAddress;
-    type AllocationTracker = AllocationTracker;
-    type ATGuard<'a> = &'a mut AllocationTracker;
+    type SegmentTracker = SegmentTracker;
+    type ATGuard<'a> = &'a mut SegmentTracker;
     type LockResult<T> = T;
 
     #[inline]
@@ -159,9 +160,9 @@ pub trait ImplReferencing<A: ManageMemory>: ImplDetails<A> {
     type BorrowLock;
 
     /// Type of the concurrent mutable access exclusion read guard.
-    type ReadGuard<'a>: DebugReq;
+    type ReadGuard<'a>: core::fmt::Debug;
     /// Type of the concurrent mutable access exclusion write guard.
-    type WriteGuard<'a>: DebugReq;
+    type WriteGuard<'a>: core::fmt::Debug;
 
     /// The type representing reference to internal state
     type StorageState: core::ops::Deref<Target = MemoryState<Self, A>>;
@@ -172,12 +173,12 @@ pub trait ImplReferencing<A: ManageMemory>: ImplDetails<A> {
         Self::get_base(base)
     }
 
-    /// Returns a writable reference to AllocationTracker.
+    /// Returns a writable reference to SegmentTracker.
     fn get_allocation_tracker(
         state: &mut Self::StorageState,
     ) -> Self::LockResult<Self::ATGuard<'_>>;
 
-    /// Releases the specified memory region back to the allocation tracker.
+    /// Releases the specified memory region back to the segment tracker.
     fn free_region(
         tracker: Self::LockResult<Self::ATGuard<'_>>,
         base: Self::LockResult<BaseAddress>,
@@ -238,7 +239,7 @@ impl<A: ManageMemory> ImplReferencing<A> for ImplConcurrent {
     fn get_allocation_tracker(
         state: &mut Self::StorageState,
     ) -> Self::LockResult<Self::ATGuard<'_>> {
-        state.tracker.lock_named(LockTarget::AllocationTracker)
+        state.tracker.lock_named(LockTarget::SegmentTracker)
     }
 
     fn free_region(
@@ -257,5 +258,58 @@ impl<A: ManageMemory> ImplReferencing<A> for ImplConcurrent {
         } else {
             None
         }
+    }
+}
+
+/// Returns [`Pointee`] metadata for provided pair of struct `S` and some
+/// unsized type (e.g. a trait) `T`.
+///
+/// This metadata is usually a pointer to vtable of `T` implementation for
+/// `S`, but can be something else and the value is considered internal to
+/// the compiler.
+#[cfg(feature = "ptr_metadata")]
+pub const fn static_metadata<S, T: ?Sized>() -> <T as core::ptr::Pointee>::Metadata
+where
+    S: core::marker::Unsize<T>,
+{
+    let (_, metadata) = (core::ptr::NonNull::<S>::dangling().as_ptr() as *const T).to_raw_parts();
+    metadata
+}
+
+pub(crate) type DropFn = fn(*mut ());
+pub(crate) const fn drop_fn<T>() -> fn(*mut ()) {
+    if core::mem::needs_drop::<T>() {
+        |ptr: *mut ()| unsafe { core::ptr::drop_in_place(ptr as *mut T) }
+    } else {
+        |_: *mut ()| {}
+    }
+}
+
+pub(crate) const fn is_layout_valid(size: usize, align: usize) -> bool {
+    if !align.is_power_of_two() {
+        return false;
+    };
+
+    size <= isize::MAX as usize - (align - 1)
+}
+
+/// Trait that unifies passing either a [`Layout`] directly or a `&T` where
+/// `T: Sized` as an argument to a function which requires a type layout.
+pub trait HasLayout {
+    /// Returns a layout of the reference or a copy of the layout directly.
+    fn as_layout(&self) -> Layout;
+}
+
+impl HasLayout for Layout {
+    #[inline]
+    fn as_layout(&self) -> Layout {
+        *self
+    }
+}
+
+impl<T> HasLayout for &T {
+    #[inline]
+    fn as_layout(&self) -> Layout {
+        Layout::new::<T>()
     }
 }

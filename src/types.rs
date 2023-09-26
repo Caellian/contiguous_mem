@@ -1,4 +1,4 @@
-//! Module re-exporting used types any polyfill to help with feature support.
+//! Module re-exporting used types and polyfill to help with feature support.
 
 #[cfg(not(feature = "no_std"))]
 mod std_imports {
@@ -136,86 +136,5 @@ impl<T: ?Sized> RwLockTypesafe<T> for RwLock<T> {
             Some(guard) => Ok(guard),
             None => Err(LockingError::WouldBlock { target }),
         }
-    }
-}
-
-#[cfg(not(feature = "debug"))]
-pub trait DebugReq {}
-#[cfg(not(feature = "debug"))]
-impl<T: ?Sized> DebugReq for T {}
-
-#[cfg(feature = "debug")]
-pub trait DebugReq: core::fmt::Debug {}
-#[cfg(feature = "debug")]
-impl<T: ?Sized + core::fmt::Debug> DebugReq for T {}
-
-/// Size requirements for types pointed to by references
-#[cfg(feature = "ptr_metadata")]
-pub trait RefSizeReq {}
-#[cfg(feature = "ptr_metadata")]
-impl<T: ?Sized> RefSizeReq for T {}
-
-/// Size requirements for types pointed to by references
-#[cfg(not(feature = "ptr_metadata"))]
-pub trait RefSizeReq: Sized {}
-#[cfg(not(feature = "ptr_metadata"))]
-impl<T: Sized> RefSizeReq for T {}
-
-use core::alloc::Layout;
-#[cfg(feature = "ptr_metadata")]
-pub use core::marker::Unsize;
-#[cfg(feature = "ptr_metadata")]
-pub use core::ptr::{DynMetadata, Pointee};
-
-/// Returns [`Pointee`] metadata for provided pair of struct `S` and some
-/// unsized type (e.g. a trait) `T`.
-///
-/// This metadata is usually a pointer to vtable of `T` implementation for
-/// `S`, but can be something else and the value is considered internal to
-/// the compiler.
-#[cfg(feature = "ptr_metadata")]
-pub const fn static_metadata<S, T: ?Sized>() -> <T as Pointee>::Metadata
-where
-    S: Unsize<T>,
-{
-    let (_, metadata) = (core::ptr::NonNull::<S>::dangling().as_ptr() as *const T).to_raw_parts();
-    metadata
-}
-
-pub(crate) type DropFn = fn(*mut ());
-pub(crate) const fn drop_fn<T>() -> fn(*mut ()) {
-    if core::mem::needs_drop::<T>() {
-        |ptr: *mut ()| unsafe { core::ptr::drop_in_place(ptr as *mut T) }
-    } else {
-        |_: *mut ()| {}
-    }
-}
-
-pub(crate) const fn is_layout_valid(size: usize, align: usize) -> bool {
-    if !align.is_power_of_two() {
-        return false;
-    };
-
-    size <= isize::MAX as usize - (align - 1)
-}
-
-/// Trait that unifies passing either a [`Layout`] directly or a `&T` where
-/// `T: Sized` as an argument to a function which requires a type layout.
-pub trait HasLayout {
-    /// Returns a layout of the reference or a copy of the layout directly.
-    fn layout(&self) -> Layout;
-}
-
-impl HasLayout for Layout {
-    #[inline]
-    fn layout(&self) -> Layout {
-        *self
-    }
-}
-
-impl<T> HasLayout for &T {
-    #[inline]
-    fn layout(&self) -> Layout {
-        Layout::new::<T>()
     }
 }

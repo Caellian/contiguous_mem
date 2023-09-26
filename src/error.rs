@@ -10,7 +10,6 @@ use std::sync::MutexGuard;
 #[cfg(not(feature = "no_std"))]
 use std::sync::PoisonError;
 
-use core::alloc::LayoutError;
 use core::fmt::Debug;
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 use core::fmt::{Display, Formatter, Result as FmtResult};
@@ -19,10 +18,10 @@ use crate::range::ByteRange;
 
 /// Represents a class of errors returned by invalid memory operations and
 /// allocator failiure.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum MemoryError {
-    /// Invalid memory layout.
-    Layout(LayoutError),
+    /// Tried allocating container capacity larger than `isize::MAX`
+    TooLarge,
     /// Allocation failure caused by either resource exhaustion or invalid
     /// arguments being provided to an allocator.
     Allocator(
@@ -34,7 +33,13 @@ pub enum MemoryError {
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Display for MemoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "Memory manager error")
+        match self {
+            MemoryError::TooLarge => write!(
+                f,
+                "Tried allocating container capacity larger than `isize::MAX`"
+            ),
+            MemoryError::Allocator(_) => write!(f, "Allocator error"),
+        }
     }
 }
 
@@ -42,18 +47,10 @@ impl Display for MemoryError {
 impl Error for MemoryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            MemoryError::Layout(inner) => Some(inner),
             #[cfg(feature = "allocator_api")]
             MemoryError::Allocator(inner) => Some(inner),
-            #[cfg(not(feature = "allocator_api"))]
-            MemoryError::Allocator(()) => None,
+            _ => None,
         }
-    }
-}
-
-impl From<LayoutError> for MemoryError {
-    fn from(err: LayoutError) -> Self {
-        MemoryError::Layout(err)
     }
 }
 
@@ -65,19 +62,19 @@ impl From<core::alloc::AllocError> for MemoryError {
 }
 
 /// Error indicating that the container is full.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct NoFreeMemoryError;
 
-/// Represents possible poisoning sources for mutexes and locks.
+/// Represents possible poisoning or stalling sources for mutexes and locks.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 #[cfg(feature = "sync_impl")]
 pub enum LockTarget {
-    /// Mutex containing the base memory offset was poisoned.
+    /// Refers to mutex containing the base memory offset.
     BaseAddress,
-    /// Allocation tracker mutex was poisoned.
-    AllocationTracker,
-    /// Concurrent mutable access exclusion flag in reference state was poisoned.
+    /// Refers to segment tracker mutex.
+    SegmentTracker,
+    /// Refers to concurrent mutable access exclusion flag in reference state.
     Reference,
 }
 
@@ -85,7 +82,7 @@ impl LockTarget {
     const fn as_str(&self) -> &'static str {
         match self {
             LockTarget::BaseAddress => "base address",
-            LockTarget::AllocationTracker => "allocation tracker",
+            LockTarget::SegmentTracker => "segment tracker",
             LockTarget::Reference => "reference",
         }
     }
@@ -114,7 +111,7 @@ impl Display for RegionBorrowError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
-            "attempted to borrow already mutably borrowed memory region: {}",
+            "Attempted to borrow already mutably borrowed memory region: {}",
             self.range
         )
     }
@@ -128,12 +125,12 @@ impl Error for RegionBorrowError {}
 #[derive(Debug)]
 #[cfg(feature = "sync_impl")]
 pub enum LockingError {
-    /// Not lockable because the mutex/lock was poisoned.
+    /// Describes failure due to the accessed Mutex/RwLock being poisoned.
     Poisoned {
         /// Specifies source of poisoning.
         target: LockTarget,
     },
-    /// Not lockable because the lock would be blocking.
+    /// Describes failure due to the fact that locking a resource would block.
     WouldBlock {
         /// Specifies which mutex/lock would block.
         target: LockTarget,
@@ -173,10 +170,10 @@ impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
 
 #[cfg(not(feature = "no_std"))]
 #[cfg(feature = "sync_impl")]
-impl From<PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>> for LockingError {
-    fn from(_: PoisonError<MutexGuard<'_, crate::tracker::AllocationTracker>>) -> Self {
+impl From<PoisonError<MutexGuard<'_, crate::memory::SegmentTracker>>> for LockingError {
+    fn from(_: PoisonError<MutexGuard<'_, crate::memory::SegmentTracker>>) -> Self {
         LockingError::Poisoned {
-            target: LockTarget::AllocationTracker,
+            target: LockTarget::SegmentTracker,
         }
     }
 }

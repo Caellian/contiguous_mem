@@ -8,18 +8,18 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
+use crate::{
+    common::*, error::RegionBorrowError, memory::ManageMemory, range::ByteRange, types::*,
+};
+
 #[cfg(feature = "sync_impl")]
 use crate::common::ImplConcurrent;
 #[cfg(feature = "sync_impl")]
 use crate::error::{LockTarget, LockingError};
-
-use crate::{
-    common::{ImplDefault, ImplDetails, ImplReferencing},
-    error::RegionBorrowError,
-    range::ByteRange,
-    raw::ManageMemory,
-    types::*,
-};
+#[cfg(feature = "ptr_metadata")]
+use core::marker::Unsize;
+#[cfg(feature = "ptr_metadata")]
+use core::ptr::Pointee;
 
 /// A synchronized (thread-safe) reference to `T` data stored in a
 /// [`ContiguousMemoryStorage`](crate::ContiguousMemory) structure.
@@ -131,11 +131,11 @@ impl<T: ?Sized, A: ManageMemory> SyncContiguousEntryRef<T, A> {
     ///
     /// This function can return the following errors:
     ///
-    /// - [`LockingError::Poisoned`] error if the Mutex holding the base address
+    /// * [`LockingError::Poisoned`] error if the Mutex holding the base address
     ///   pointer or the Mutex holding mutable access exclusion flag has been
     ///   poisoned.
     ///
-    /// - [`LockingError::WouldBlock`] error if accessing referenced data chunk
+    /// * [`LockingError::WouldBlock`] error if accessing referenced data chunk
     ///   would be blocking.
     pub fn try_get_mut(
         &mut self,
@@ -577,7 +577,7 @@ impl<T: ?Sized, A: ManageMemory> core::fmt::Debug for ContiguousEntryRef<T, A> {
 }
 
 pub(crate) mod sealed {
-    use crate::raw::ManageMemory;
+    use crate::memory::ManageMemory;
 
     use super::*;
 
@@ -627,6 +627,18 @@ pub(crate) mod sealed {
         Read(usize),
         Write,
     }
+
+    /// Size requirements for types pointed to by references
+    #[cfg(feature = "ptr_metadata")]
+    pub trait RefSizeReq {}
+    #[cfg(feature = "ptr_metadata")]
+    impl<T: ?Sized> RefSizeReq for T {}
+
+    /// Size requirements for types pointed to by references
+    #[cfg(not(feature = "ptr_metadata"))]
+    pub trait RefSizeReq: Sized {}
+    #[cfg(not(feature = "ptr_metadata"))]
+    impl<T: Sized> RefSizeReq for T {}
 }
 use sealed::*;
 

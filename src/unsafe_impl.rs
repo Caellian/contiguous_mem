@@ -2,28 +2,18 @@ use core::alloc::Layout;
 use core::mem::{align_of, size_of, ManuallyDrop};
 use core::ptr::null_mut;
 
+use crate::common::*;
 use crate::error::{MemoryError, NoFreeMemoryError};
+use crate::memory::{DefaultMemoryManager, ManageMemory};
 use crate::range::ByteRange;
 use crate::raw::*;
-use crate::types::*;
 
-/// A memory container for efficient allocation and storage of contiguous data.
-///
-/// This collection manages a contiguous block of memory, allowing for storage
-/// of arbitrary data types while ensuring that stored items are placed
-/// adjacently and ensuring they're properly alligned.
-///
-/// Type argument `Impl` specifies implementation details for the behavior of
-/// this struct.
-///
-/// Note that copying this structure creates a copy which represents the same
-/// internal state.
-/// If you need to copy the memory region into a new container use:
-/// [`UnsafeContiguousMemory::copy_data`]
+/// An unsafe version of [`ContiguousMemory`](crate::ContiguousMemory), refer to
+/// it for usage examples.
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```
 #[doc = include_str!("../examples/unsafe_impl.rs")]
 /// ```
 pub struct UnsafeContiguousMemory<A: ManageMemory = DefaultMemoryManager> {
@@ -177,7 +167,7 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```
     /// # use contiguous_mem::UnsafeContiguousMemory;
     /// # use core::mem::size_of_val;
     /// let mut storage = UnsafeContiguousMemory::new();
@@ -192,18 +182,20 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// let stored_value =
     ///   storage.push(value).expect("unable to store after growing the container");
     /// ```
+    #[inline]
     pub fn can_push_t<T>(&self) -> bool {
-        let layout = Layout::new::<T>();
-        self.inner.tracker.peek_next(layout).is_some()
+        self.can_push(Layout::new::<T>())
     }
 
     /// Returns `true` if the provided `value` can be stored without growing the
     /// container.
     ///
     /// `value` can either be a [`Layout`] or a reference to a `Sized` value.
-    pub fn can_push<T>(&self, value: impl HasLayout) -> bool {
-        let layout = value.layout();
-        self.inner.tracker.peek_next(layout).is_some()
+    #[inline]
+    pub fn can_push(&self, value: impl HasLayout) -> bool {
+        self.inner
+            .tracker
+            .can_store(self.inner.base.0, value.as_layout())
     }
 
     /// Grows the memory container to the specified `new_capacity`, optionally
@@ -219,7 +211,7 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     pub fn grow_to(&mut self, new_capacity: usize) -> Option<BasePtr> {
         match self.try_grow_to(new_capacity) {
             Ok(it) => it,
-            Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
+            Err(MemoryError::TooLarge) => panic!("new capacity exceeds `isize::MAX`"),
             Err(MemoryError::Allocator(_)) => panic!("allocator error"),
         }
     }
@@ -235,15 +227,14 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// Make sure to update any previously created pointers.
     pub fn try_grow_to(&mut self, new_capacity: usize) -> Result<Option<BasePtr>, MemoryError> {
         let old_capacity = self.capacity();
-        let new_capacity = core::cmp::max(old_capacity, new_capacity);
+        let new_capacity = self.inner.tracker.grow(new_capacity);
         if new_capacity == old_capacity {
             return Ok(None);
-        }
-
-        self.inner.tracker.grow(new_capacity);
+        };
 
         let old_layout = self.layout();
-        let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)?;
+        let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)
+            .map_err(|_| MemoryError::TooLarge)?;
 
         let prev_base = self.inner.base.0;
         self.inner.base.0 = unsafe { self.inner.alloc.grow(prev_base, old_layout, new_layout)? };
@@ -260,70 +251,167 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
         })
     }
 
-    /// Grows the underlying memory by `additional` number of bytes.
+    /// Handles reserving capacity while ensuring appropriate padding.
+    #[inline]
+    fn ensure_free_section<const EXACT: bool>(
+        &mut self,
+        required: usize,
+        align: Option<usize>,
+    ) -> Result<Option<BasePtr>, MemoryError> {
+        let (capacity, last_offset, largest_free, tailing_free) = {
+            let tracker = &self.inner.tracker;
+            (
+                tracker.size(),
+                tracker.last_offset(),
+                tracker.largest_free_range(),
+                tracker.tailing_free_bytes(),
+            )
+        };
+        let base_pos = self.base_ptr() as usize;
+
+        if let Some(largest) = largest_free {
+            debug_assert!(base_pos != 0);
+
+            let largest_size = align
+                .map(|a| largest.offset(base_pos).aligned(a))
+                .unwrap_or(largest)
+                .len();
+
+            if largest_size >= required {
+                return Ok(None);
+            }
+        }
+
+        let padding = match align {
+            None => 0,
+            Some(a) => {
+                // we know that base + last_offset won't fall out of addressable
+                // range because allocator would've already failed by this point
+                let pos = if capacity > 0 {
+                    base_pos + last_offset
+                } else {
+                    // if capacity is 0, we didn't allocate and only need to
+                    // ensure relative alignment padding
+                    self.align()
+                };
+                let extra = pos % a;
+
+                // if already aligned padding is 0
+                if extra > 0 {
+                    a - extra
+                } else {
+                    0
+                }
+            }
+        };
+
+        let mut additional = required + padding - tailing_free;
+        if !EXACT {
+            additional = core::cmp::max(capacity, additional);
+        }
+
+        self.try_grow_to(capacity + additional)
+    }
+
+    /// Grows the underlying memory to ensure container has a free segment that
+    /// can store `capacity`.
+    /// This function might allocate more than requested amount of memory to
+    /// reduce number of reallocations.
     ///
-    /// After calling this function, new capacity will be equal to:
-    /// `self.get_capacity() + additional`.
+    /// If the base address changed due to reallocation, new [`BasePtr`] is
+    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
+    /// result is `Ok(None)`.
     ///
-    /// Make sure to update any previously created pointers.
+    /// After calling this function, new capacity will be greater than:
+    /// `self.size() + capacity`.
     ///
     /// # Panics
     ///
     /// Panics if attempting to grow the container to a capacity larger than
     /// `isize::MAX` or the allocator can't allocate required memory.
     #[inline]
-    pub fn reserve(&mut self, additional: usize) -> Option<BasePtr> {
-        match self.try_reserve(additional) {
+    pub fn reserve(&mut self, capacity: usize) -> Option<BasePtr> {
+        match self.try_reserve(capacity) {
             Ok(it) => it,
-            Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
+            Err(MemoryError::TooLarge) => panic!("new capacity exceeds `isize::MAX`"),
             Err(MemoryError::Allocator(_)) => panic!("unable to allocate more memory"),
         }
     }
 
-    /// Tries growing the underlying memory by `additional` number of bytes,
-    /// returning a [`MemoryError`] error if the new capacity exceeds
-    /// `isize::MAX` or the allocator can't allocate required memory.
+    /// Tries growing the underlying memory to ensure container has a free
+    /// segment that can store `capacity`.
+    /// This function might allocate more than requested amount of memory to
+    /// reduce number of reallocations.
     ///
-    /// After calling this function, new capacity will be equal to:
-    /// `self.get_capacity() + additional`.
+    /// If the base address changed due to reallocation, new [`BasePtr`] is
+    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
+    /// result is `Ok(None)`.
     ///
-    /// Make sure to update any previously created pointers.
-    #[inline]
-    pub fn try_reserve(&mut self, additional: usize) -> Result<Option<BasePtr>, MemoryError> {
-        if additional == 0 {
+    /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
+    /// allocate required memory, a [`MemoryError`] is returned.
+    ///
+    /// After calling this function, new capacity will be greater than:
+    /// `self.size() + capacity`.
+    pub fn try_reserve(&mut self, capacity: usize) -> Result<Option<BasePtr>, MemoryError> {
+        if capacity == 0 {
             return Ok(None);
         }
-
-        let old_capacity = self.capacity();
-        let new_capacity = old_capacity.saturating_add(additional);
-
-        self.inner.tracker.grow(new_capacity);
-        let old_layout = self.layout();
-        let new_layout = Layout::from_size_align(new_capacity, self.inner.alignment)?;
-        let prev_base = self.base();
-
-        self.inner.base.0 = unsafe { self.inner.alloc.grow(prev_base, old_layout, new_layout)? };
-
-        Ok(if self.inner.base.0 != prev_base {
-            Some(unsafe {
-                // SAFETY: new_capacity must be > 0, because it's max of
-                // old_capacity and passed argument, if both are 0 we return
-                // early
-                self.inner.base.0.unwrap_unchecked()
-            })
-        } else {
-            None
-        })
+        self.ensure_free_section::<false>(capacity, None)
     }
 
-    /// Reserves additional bytes required to store a value with provided
-    /// `layout` while keeping it aligned (required padding bytes at the end of
-    /// the container will be included).
+    /// Grows the underlying memory to ensure container has a free segment that
+    /// can store `capacity`.
+    ///
+    /// If the base address changed due to reallocation, new [`BasePtr`] is
+    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
+    /// result is `Ok(None)`.
     ///
     /// After calling this function, new capacity will be equal to:
-    /// `self.get_capacity() + padding + size_of::<V>()`.
+    /// `self.size() + capacity`.
     ///
-    /// Make sure to update any previously created pointers.
+    /// # Panics
+    ///
+    /// Panics if attempting to grow the container to a capacity larger than
+    /// `isize::MAX` or the allocator can't allocate required memory.
+    #[inline]
+    pub fn reserve_exact(&mut self, capacity: usize) -> Option<BasePtr> {
+        match self.try_reserve_exact(capacity) {
+            Ok(it) => it,
+            Err(MemoryError::TooLarge) => panic!("new capacity exceeds `isize::MAX`"),
+            Err(MemoryError::Allocator(_)) => panic!("unable to allocate more memory"),
+        }
+    }
+
+    /// Tries growing the underlying memory to ensure container has a free
+    /// segment that can store `capacity`.
+    ///
+    /// If the base address changed due to reallocation, new [`BasePtr`] is
+    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
+    /// result is `Ok(None)`.
+    ///
+    /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
+    /// allocate required memory, a [`MemoryError`] is returned.
+    ///
+    /// After calling this function, new capacity will be equal to:
+    /// `self.size() + capacity`.
+    pub fn try_reserve_exact(&mut self, capacity: usize) -> Result<Option<BasePtr>, MemoryError> {
+        if capacity == 0 {
+            return Ok(None);
+        }
+        self.ensure_free_section::<true>(capacity, None)
+    }
+
+    /// Grows the underlying memory to ensure container has a free segment that
+    /// can store a value with provided `layout`.
+    /// This function might allocate more than requested amount of memory to
+    /// reduce number of reallocations.
+    ///
+    /// If the base address changed due to reallocation, new [`BasePtr`] is
+    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
+    /// result is `Ok(None)`.
+    ///
+    /// After calling this function, new capacity will be greater than:
+    /// `self.size() + padding + size_of::<V>()`.
     ///
     /// # Panics
     ///
@@ -333,42 +421,80 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     pub fn reserve_layout(&mut self, layout: impl HasLayout) -> Option<BasePtr> {
         match self.try_reserve_layout(layout) {
             Ok(it) => it,
-            Err(MemoryError::Layout(_)) => panic!("new capacity exceeds `isize::MAX`"),
+            Err(MemoryError::TooLarge) => panic!("new capacity exceeds `isize::MAX`"),
             Err(MemoryError::Allocator(_)) => panic!("unable to allocate more memory"),
         }
     }
 
-    /// Reserves additional bytes required to store a value with provided
-    /// `layout` while keeping it aligned (required padding bytes at the end of
-    /// the container will be included).
+    /// Tries growing the underlying memory to ensure container has a free
+    /// segment that can store a value with provided `layout`.
+    /// This function might allocate more than requested amount of memory to
+    /// reduce number of reallocations.
     ///
-    /// After calling this function, new capacity will be equal to:
-    /// `self.get_capacity() + padding + size_of::<V>()`.
+    /// If the base address changed due to reallocation, new [`BasePtr`] is
+    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
+    /// result is `Ok(None)`.
     ///
-    /// Make sure to update any previously created pointers.
+    /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
+    /// allocate required memory, a [`MemoryError`] is returned.
+    ///
+    /// After calling this function, new capacity will be greater than:
+    /// `self.size() + padding + size_of::<V>()`.
     pub fn try_reserve_layout(
         &mut self,
         layout: impl HasLayout,
     ) -> Result<Option<BasePtr>, MemoryError> {
-        let layout = layout.layout();
-        match self.base() {
-            Some(base) => {
-                let last = unsafe { (base.as_ptr() as *mut u8).add(self.inner.tracker.len()) };
-                let align_offset = last.align_offset(layout.align());
-                self.try_reserve(self.capacity() + align_offset + layout.size())
-            }
-            None => {
-                self.inner.tracker.grow(layout.size());
-                let new_layout = Layout::from_size_align(
-                    layout.size(),
-                    core::cmp::max(self.inner.alignment, layout.align()),
-                )?;
-
-                self.inner.base.0 = self.inner.alloc.allocate(new_layout)?;
-
-                Ok(self.inner.base.0)
-            }
+        let layout = layout.as_layout();
+        if layout.size() == 0 {
+            return Ok(None);
         }
+        self.ensure_free_section::<false>(layout.size(), Some(layout.align()))
+    }
+
+    /// Grows the underlying memory to ensure container has a free segment that
+    /// can store a value with provided `layout`.
+    ///
+    /// If the base address changed due to reallocation, new [`BasePtr`] is
+    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
+    /// result is `Ok(None)`.
+    ///
+    /// After calling this function, new capacity will be equal to:
+    /// `self.size() + padding + size_of::<V>()`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if attempting to grow the container to a capacity larger than
+    /// `isize::MAX` or the allocator can't allocate required memory.
+    #[inline]
+    pub fn reserve_layout_exact(&mut self, layout: impl HasLayout) -> Option<BasePtr> {
+        match self.try_reserve_layout_exact(layout) {
+            Ok(it) => it,
+            Err(MemoryError::TooLarge) => panic!("new capacity exceeds `isize::MAX`"),
+            Err(MemoryError::Allocator(_)) => panic!("unable to allocate more memory"),
+        }
+    }
+
+    /// Tries growing the underlying memory to ensure container has a free
+    /// segment that can store a value with provided `layout`.
+    ///
+    /// If the base address changed due to reallocation, new [`BasePtr`] is
+    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
+    /// result is `Ok(None)`.
+    ///
+    /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
+    /// allocate required memory, a [`MemoryError`] is returned.
+    ///
+    /// After calling this function, new capacity will be equal to:
+    /// `self.size() + padding + layout.size()`.
+    pub fn try_reserve_layout_exact(
+        &mut self,
+        layout: impl HasLayout,
+    ) -> Result<Option<BasePtr>, MemoryError> {
+        let layout = layout.as_layout();
+        if layout.size() == 0 {
+            return Ok(None);
+        }
+        self.ensure_free_section::<true>(layout.size(), Some(layout.align()))
     }
 
     /// Shrinks the capacity with a lower bound and returns the base pointer.
@@ -378,8 +504,8 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// Panics if the allocator wasn't able to shrink the allocated memory
     /// region.
     pub fn shrink_to(&mut self, new_capacity: usize) -> BaseAddress {
-        let new_capacity = core::cmp::max(self.inner.tracker.min_len(), new_capacity);
-        self.inner.tracker.shrink(new_capacity);
+        let new_capacity = self.inner.tracker.shrink(new_capacity);
+
         let prev_base = self.inner.base.0;
 
         let old_layout = self.layout();
@@ -433,9 +559,9 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// Value type argument `T` is used to infer type size.
     ///
     /// Unsafe implementation requres manually calling
-    /// [`UnsafeContiguousMemory::resize`] as growing the capacity almost always
-    /// causes a reallocation which would invalidate all the existing pointers
-    /// without any indication.
+    /// [`UnsafeContiguousMemory::grow_to`] as growing the capacity almost
+    /// always causes a reallocation which would invalidate all the existing
+    /// pointers without any indication.
     pub fn push<T>(&mut self, value: T) -> Result<*mut T, NoFreeMemoryError> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
@@ -462,14 +588,14 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     ) -> Result<*mut T, NoFreeMemoryError> {
         let base = self.inner.base.0;
         let addr = match self.inner.tracker.take_next(base, layout) {
-            Ok(taken) => {
+            Some(taken) => {
                 let found = taken.offset_base_unwrap(base);
                 unsafe {
                     core::ptr::copy_nonoverlapping(data as *mut u8, found, layout.size());
                 }
                 found
             }
-            Err(_) => return Err(NoFreeMemoryError),
+            None => return Err(NoFreeMemoryError),
         };
 
         Ok(addr as *mut T)
@@ -487,7 +613,7 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// code that's dereferencing the pointer.
     ///
     /// # Examples
-    /// ```rust
+    /// ```
     /// # use contiguous_mem::UnsafeContiguousMemory;
     /// let mut storage = UnsafeContiguousMemory::with_capacity(128);
     /// let initial_position = storage.push(278u32).unwrap();
@@ -509,7 +635,7 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
         }
     }
 
-    /// Clones the allocated memory region into a new UnsafeContiguousMemory.
+    /// Clones the allocated memory region into a new `UnsafeContiguousMemory`.
     ///
     /// This function isn't unsafe, even though it ignores presence of `Copy`
     /// bound on stored data, because it doesn't create any pointers.
@@ -584,7 +710,7 @@ impl<A: ManageMemory> UnsafeContiguousMemory<A> {
     /// # Panics
     ///
     /// This function panics in debug mode if the provided region falls outside
-    /// of the memory tracked by the allocation tracker.
+    /// of the memory tracked by the segment tracker.
     ///
     /// # Safety
     ///
@@ -622,14 +748,6 @@ where
     }
 }
 
-impl<A: ManageMemory + Clone> Clone for UnsafeContiguousMemory<A> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
 impl Default for UnsafeContiguousMemory {
     fn default() -> Self {
         UnsafeContiguousMemory::new()
@@ -639,5 +757,17 @@ impl Default for UnsafeContiguousMemory {
 impl<A: ManageMemory + Default> Default for UnsafeContiguousMemory<A> {
     fn default() -> Self {
         UnsafeContiguousMemory::with_alloc(A::default())
+    }
+}
+
+impl<A: ManageMemory + Clone> Clone for UnsafeContiguousMemory<A> {
+    /// Creates a copy which represents the same memory region as this one.
+    ///
+    /// If you need to copy the memory region of this container into a new one,
+    /// use: [`UnsafeContiguousMemory::copy_data`]
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 }
