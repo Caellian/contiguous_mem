@@ -24,10 +24,11 @@ fn main() {
     let mut storage = ContiguousMemory::with_capacity(4096);
     let person1 = storage.push(Person("Joe".to_string()));
 
-    let person2: ContiguousEntryRef<dyn Greetable> =
+    let person2: ContiguousEntryRef<dyn Greetable, _> =
         storage.push(Person("Craig".to_string())).into_dyn();
 
-    let dog: ContiguousEntryRef<dyn Greetable> = storage.push(Dog("Rover".to_string())).into_dyn();
+    let dog: ContiguousEntryRef<dyn Greetable, _> =
+        storage.push(Dog("Rover".to_string())).into_dyn();
 
     person1.get().print_hello();
     person2.get().print_hello();

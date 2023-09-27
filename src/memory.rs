@@ -291,7 +291,7 @@ impl core::fmt::Debug for SegmentTracker {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SegmentTracker")
             .field("size", &self.size)
-            .field("unused", &self.unused)
+            .field("unused", &self.unoccupied)
             .finish()
     }
 }
