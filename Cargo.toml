@@ -17,6 +17,8 @@ required-features = ["ptr_metadata"]
 [dependencies]
 spin = { version = "0.9", optional = true }
 
+contiguous-mem_codegen = { path = "./codegen" }
+
 [features]
 default = ["sync_impl", "unsafe_impl", "ptr_metadata", "debug"]
 

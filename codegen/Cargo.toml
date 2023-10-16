@@ -1,0 +1,18 @@
+[package]
+name = "contiguous-mem_codegen"
+version = "0.1.0"
+edition = "2021"
+description = "Macro that generates sync code for contiguous-mem"
+authors = ["Tin Švagelj <tin.svagelj@live.com>"]
+license = "MIT OR Apache-2.0 OR Zlib"
+repository = "https://github.com/Caellian/contiguous_mem"
+
+[lib]
+proc_macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "derive", "visit", "visit-mut"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+typestry = { path = "./typestry" }
+#prettyplease

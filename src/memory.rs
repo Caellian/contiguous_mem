@@ -4,6 +4,7 @@ use core::cmp;
 use core::{alloc::Layout, ptr::NonNull};
 
 use crate::common::HasLayout;
+use crate::raw::MemoryBase;
 pub use crate::raw::{BaseAddress, BasePtr};
 
 #[cfg(feature = "no_std")]
@@ -138,7 +139,7 @@ impl SegmentTracker {
 
     /// Returns `true` if the provided type `layout` can ne stored within any
     /// unused segments of the represented memory region.
-    pub fn can_store(&self, base_address: BaseAddress, layout: impl HasLayout) -> bool {
+    pub fn can_store(&self, base_address: MemoryBase, layout: impl HasLayout) -> bool {
         let layout = layout.as_layout();
         if layout.size() == 0 {
             return true;
@@ -147,7 +148,7 @@ impl SegmentTracker {
         }
 
         self.unoccupied.iter().enumerate().any(|(_, it)| {
-            it.offset(base_addr_position(base_address)) // absolute range
+            it.offset(base_address.pos_or_align()) // absolute range
                 .aligned(layout.align()) // aligned to value
                 .len()
                 >= layout.size()
@@ -635,5 +636,36 @@ impl<A: Allocator> ManageMemory for A {
                 }
             }
         }
+    }
+}
+
+impl<D: core::ops::Deref> ManageMemory for D
+where
+    D::Target: ManageMemory,
+{
+    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
+        (*self).allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
+        (*self).deallocate(address, layout)
+    }
+
+    unsafe fn shrink(
+        &self,
+        address: BaseAddress,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<BaseAddress, MemoryError> {
+        (*self).shrink(address, old_layout, new_layout)
+    }
+
+    unsafe fn grow(
+        &self,
+        address: BaseAddress,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<BaseAddress, MemoryError> {
+        (*self).grow(address, old_layout, new_layout)
     }
 }

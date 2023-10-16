@@ -1,14 +1,7 @@
 //! Errors produced by the crate.
 
-#[cfg(feature = "error_in_core")]
-use core::error::Error;
-#[cfg(all(not(feature = "error_in_core"), not(feature = "no_std")))]
-use std::error::Error;
-
-#[cfg(not(feature = "no_std"))]
-use std::sync::MutexGuard;
-#[cfg(not(feature = "no_std"))]
-use std::sync::PoisonError;
+#[cfg(any(feature = "error_in_core", not(feature = "no_std")))]
+use crate::types::Error;
 
 use core::fmt::Debug;
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
@@ -65,29 +58,6 @@ impl From<core::alloc::AllocError> for MemoryError {
 #[derive(Debug, Clone, Copy)]
 pub struct NoFreeMemoryError;
 
-/// Represents possible poisoning or stalling sources for mutexes and locks.
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-#[cfg(feature = "sync_impl")]
-pub enum LockTarget {
-    /// Refers to mutex containing the base memory offset.
-    BaseAddress,
-    /// Refers to segment tracker mutex.
-    SegmentTracker,
-    /// Refers to concurrent mutable access exclusion flag in reference state.
-    Reference,
-}
-
-impl LockTarget {
-    const fn as_str(&self) -> &'static str {
-        match self {
-            LockTarget::BaseAddress => "base address",
-            LockTarget::SegmentTracker => "segment tracker",
-            LockTarget::Reference => "reference",
-        }
-    }
-}
-
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Display for NoFreeMemoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -120,80 +90,109 @@ impl Display for RegionBorrowError {
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 impl Error for RegionBorrowError {}
 
-/// Error returned when a [`Mutex`](crate::types::Mutex) or a
-/// [`RwLock`](crate::types::RwLock) isn't lockable.
-#[derive(Debug)]
-#[cfg(feature = "sync_impl")]
-pub enum LockingError {
-    /// Describes failure due to the accessed Mutex/RwLock being poisoned.
-    Poisoned {
-        /// Specifies source of poisoning.
-        target: LockTarget,
-    },
-    /// Describes failure due to the fact that locking a resource would block.
-    WouldBlock {
-        /// Specifies which mutex/lock would block.
-        target: LockTarget,
-    },
+/// Represents possible poisoning or stalling sources for mutexes and locks.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum LockTarget {
+    /// Refers to mutex containing the base memory offset.
+    BaseAddress,
+    /// Refers to segment tracker mutex.
+    SegmentTracker,
+    /// Refers to concurrent mutable access exclusion flag in reference state.
+    Reference,
 }
 
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 #[cfg(feature = "sync_impl")]
-impl Display for LockingError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+impl LockTarget {
+    const fn as_str(&self) -> &'static str {
         match self {
-            LockingError::Poisoned { target } => {
-                write!(f, "Cannot lock {}, it was poisoned", target.as_str())
+            LockTarget::BaseAddress => "base address",
+            LockTarget::SegmentTracker => "segment tracker",
+            LockTarget::Reference => "reference",
+        }
+    }
+}
+
+#[cfg(feature = "sync_impl")]
+mod sync {
+    use super::*;
+
+    #[cfg(not(feature = "no_std"))]
+    use std::sync::MutexGuard;
+    #[cfg(not(feature = "no_std"))]
+    use std::sync::PoisonError;
+
+    /// Error returned when a [`Mutex`](crate::types::Mutex) or a
+    /// [`RwLock`](crate::types::RwLock) isn't lockable.
+    #[derive(Debug)]
+    pub enum LockingError {
+        /// Describes failure due to the accessed Mutex/RwLock being poisoned.
+        Poisoned {
+            /// Specifies source of poisoning.
+            target: LockTarget,
+        },
+        /// Describes failure due to the fact that locking a resource would block.
+        WouldBlock {
+            /// Specifies which mutex/lock would block.
+            target: LockTarget,
+        },
+    }
+
+    #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+    impl Display for LockingError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+            match self {
+                LockingError::Poisoned { target } => {
+                    write!(f, "Cannot lock {}, it was poisoned", target.as_str())
+                }
+                LockingError::WouldBlock { target } => write!(
+                    f,
+                    "Locking {} would block the current thread",
+                    target.as_str()
+                ),
             }
-            LockingError::WouldBlock { target } => write!(
-                f,
-                "Locking {} would block the current thread",
-                target.as_str()
-            ),
+        }
+    }
+
+    #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+    impl Error for LockingError {}
+
+    #[cfg(not(feature = "no_std"))]
+    impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
+        fn from(_: PoisonError<MutexGuard<'_, *mut u8>>) -> Self {
+            LockingError::Poisoned {
+                target: LockTarget::BaseAddress,
+            }
+        }
+    }
+
+    #[cfg(not(feature = "no_std"))]
+    impl From<PoisonError<MutexGuard<'_, crate::memory::SegmentTracker>>> for LockingError {
+        fn from(_: PoisonError<MutexGuard<'_, crate::memory::SegmentTracker>>) -> Self {
+            LockingError::Poisoned {
+                target: LockTarget::SegmentTracker,
+            }
+        }
+    }
+
+    /// A wrapper that represents either a memory error or a locking error.
+    pub enum SyncMemoryError {
+        /// A memory error.
+        Memory(MemoryError),
+        /// A locking error.
+        Lock(LockingError),
+    }
+
+    impl From<MemoryError> for SyncMemoryError {
+        fn from(err: MemoryError) -> Self {
+            SyncMemoryError::Memory(err)
+        }
+    }
+    impl From<LockingError> for SyncMemoryError {
+        fn from(err: LockingError) -> Self {
+            SyncMemoryError::Lock(err)
         }
     }
 }
-
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 #[cfg(feature = "sync_impl")]
-impl Error for LockingError {}
-
-#[cfg(not(feature = "no_std"))]
-#[cfg(feature = "sync_impl")]
-impl From<PoisonError<MutexGuard<'_, *mut u8>>> for LockingError {
-    fn from(_: PoisonError<MutexGuard<'_, *mut u8>>) -> Self {
-        LockingError::Poisoned {
-            target: LockTarget::BaseAddress,
-        }
-    }
-}
-
-#[cfg(not(feature = "no_std"))]
-#[cfg(feature = "sync_impl")]
-impl From<PoisonError<MutexGuard<'_, crate::memory::SegmentTracker>>> for LockingError {
-    fn from(_: PoisonError<MutexGuard<'_, crate::memory::SegmentTracker>>) -> Self {
-        LockingError::Poisoned {
-            target: LockTarget::SegmentTracker,
-        }
-    }
-}
-
-#[cfg(feature = "sync_impl")]
-/// A wrapper that represents either a memory error or a locking error.
-pub enum SyncMemoryError {
-    /// A memory error.
-    Memory(MemoryError),
-    /// A locking error.
-    Lock(LockingError),
-}
-
-impl From<MemoryError> for SyncMemoryError {
-    fn from(err: MemoryError) -> Self {
-        SyncMemoryError::Memory(err)
-    }
-}
-impl From<LockingError> for SyncMemoryError {
-    fn from(err: LockingError) -> Self {
-        SyncMemoryError::Lock(err)
-    }
-}
+pub use sync::*;
