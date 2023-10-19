@@ -10,36 +10,27 @@
 #[cfg(feature = "no_std")]
 extern crate alloc;
 
-mod common;
 pub mod error;
 pub mod memory;
 pub mod range;
 mod raw;
 pub mod reference;
-mod types;
+pub mod types;
 
 // Re-exports
-#[cfg(feature = "ptr_metadata")]
-pub use common::static_metadata;
 pub use error::*;
-pub use reference::{CERef, ContiguousEntryRef};
-#[cfg(feature = "sync_impl")]
-pub use reference::{SCERef, SyncContiguousEntryRef};
+use reference::ConstructReference;
+pub use reference::{CERef, EntryRef};
 
-use core::cell::Cell;
-use core::marker::PhantomData;
 use core::mem::align_of;
 use core::{
     alloc::Layout,
     mem::{size_of, ManuallyDrop},
 };
 
-use common::*;
 use memory::{DefaultMemoryManager, ManageMemory};
 use range::ByteRange;
 use raw::*;
-use reference::state::{BorrowState, ReferenceState};
-use reference::EntryRef;
 use types::*;
 
 /// A memory container for efficient allocation and storage of contiguous data.
@@ -58,11 +49,6 @@ pub struct ContiguousMemory<
     A: ManageMemory = DefaultMemoryManager,
 > {
     inner: Impl::StateRef<MemoryState<Impl, A>>,
-}
-
-#[cfg(feature = "sync_impl")]
-pub struct SyncContiguousMemory<A: ManageMemory = DefaultMemoryManager> {
-    inner: Arc<MemoryState<ImplConcurrent, A>>,
 }
 
 impl<Impl: ImplDetails<DefaultMemoryManager>> ContiguousMemory<Impl> {
@@ -147,7 +133,6 @@ impl<Impl: ImplDetails<DefaultMemoryManager>> ContiguousMemory<Impl> {
     }
 }
 
-#[contiguous_mem_codegen::gen_sync]
 impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// Creates a new, empty `ContiguousMemory` instance aligned with alignment
     /// of `usize` that uses the specified allocator.
@@ -255,8 +240,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// assert_eq!(s.base().is_some(), true);
     /// ```
     pub fn base(&self) -> MemoryBase {
-        *ReadableInner::read_named(&self.inner.base, LockTarget::BaseAddress)
-            .expect("can't read base")
+        *ReadableInner::read(&self.inner.base).expect("can't read base")
     }
 
     /// Returns a pointer to the base address of the allocated memory or `null`
@@ -331,7 +315,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     pub fn size(&self) -> usize {
         self.capacity()
-            - ReadableInner::read_named(&self.inner.tracker, LockTarget::SegmentTracker)
+            - ReadableInner::read(&self.inner.tracker)
                 .unwrap()
                 .count_free()
     }
@@ -419,8 +403,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     pub fn can_push(&self, value: impl HasLayout) -> bool {
         let layout = value.as_layout();
-        let tracker =
-            ReadableInner::read_named(&self.inner.tracker, LockTarget::SegmentTracker).unwrap();
+        let tracker = ReadableInner::read(&self.inner.tracker).unwrap();
         let base = self.base();
         tracker.can_store(base, layout)
     }
@@ -486,14 +469,12 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// assert!(s.try_grow_to(required_size).is_err());
     /// ```
     pub fn try_grow_to(&mut self, new_capacity: usize) -> Result<Option<MemoryBase>, MemoryError> {
-        let mut base =
-            WritableInner::write_named(&self.inner.base, LockTarget::BaseAddress).unwrap();
+        let mut base = WritableInner::write(&self.inner.base).unwrap();
 
         let old_capacity = base.size();
-        let new_capacity =
-            WritableInner::write_named(&self.inner.tracker, LockTarget::SegmentTracker)
-                .unwrap()
-                .grow(new_capacity);
+        let new_capacity = WritableInner::write(&self.inner.tracker)
+            .unwrap()
+            .grow(new_capacity);
         if new_capacity == old_capacity {
             return Ok(None);
         };
@@ -524,8 +505,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         align: Option<usize>,
     ) -> Result<Option<MemoryBase>, MemoryError> {
         let (capacity, last_offset, largest_free, tailing_free) = {
-            let tracker =
-                ReadableInner::read_named(&self.inner.tracker, LockTarget::SegmentTracker).unwrap();
+            let tracker = ReadableInner::read(&self.inner.tracker).unwrap();
             (
                 tracker.size(),
                 tracker.last_offset(),
@@ -808,11 +788,9 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// Panics if the allocator wasn't able to shrink the allocated memory
     /// region.
     pub fn shrink_to(&mut self, new_capacity: usize) -> MemoryBase {
-        let mut tracker =
-            WritableInner::write_named(&self.inner.tracker, LockTarget::SegmentTracker).unwrap();
+        let mut tracker = WritableInner::write(&self.inner.tracker).unwrap();
         let new_capacity = tracker.shrink(new_capacity);
-        let mut base =
-            WritableInner::write_named(&self.inner.base, LockTarget::BaseAddress).unwrap();
+        let mut base = WritableInner::write(&self.inner.base).unwrap();
 
         let old_layout = self.layout();
         if new_capacity == old_layout.size() {
@@ -838,16 +816,14 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// Shrinks the capacity to fit the currently stored data and returns the
     /// base pointer.
     pub fn shrink_to_fit(&mut self) -> MemoryBase {
-        let mut base =
-            WritableInner::write_named(&self.inner.base, LockTarget::BaseAddress).unwrap();
-        let new_capacity =
-            match WritableInner::write_named(&self.inner.tracker, LockTarget::SegmentTracker)
-                .unwrap()
-                .shrink_to_fit()
-            {
-                Some(it) => it,
-                None => return *base,
-            };
+        let mut base = WritableInner::write(&self.inner.base).unwrap();
+        let new_capacity = match WritableInner::write(&self.inner.tracker)
+            .unwrap()
+            .shrink_to_fit()
+        {
+            Some(it) => it,
+            None => return *base,
+        };
         let old_layout = self.layout();
         let new_layout = unsafe {
             // SAFETY: Previous layout was valid and had valid alignment,
@@ -866,7 +842,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Stores a `value` of type `T` in the contiguous memory block and returns
-    /// a [`reference`](ContiguousEntryRef) to it.
+    /// a [`reference`](EntryRef) to it.
     ///
     /// Value type argument `T` is used to infer type size and returned
     /// reference dropping behavior.
@@ -944,9 +920,9 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     pub unsafe fn push_raw<T>(&mut self, data: *const T, layout: Layout) -> Impl::PushResult<T> {
         let range = loop {
             let base = self.base();
-            let next = WritableInner::write_named(&self.inner.tracker, LockTarget::SegmentTracker)
+            let next = WritableInner::write(&self.inner.tracker)
                 .unwrap()
-                .take_next(base.address, layout);
+                .take_next(base.pos_or_align(), layout);
 
             match next {
                 Some(it) => {
@@ -959,11 +935,13 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
                 None if Impl::GROW => {
                     self.reserve_layout(layout);
                 }
-                _ => {}
+                _ => {
+                    break ByteRange::EMPTY;
+                }
             }
         };
 
-        EntryRef::new(&self.inner, range)
+        ConstructReference::new(&self.inner, range)
     }
 
     /// Variant of [`push_raw`](ContiguousMemory::push_raw) which returns a
@@ -998,7 +976,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// considered unsafe. Responsibility for guaranteeing safety falls on
     /// code that's dereferencing the pointer.
     pub fn assume_stored<T>(&self, position: usize) -> Impl::PushResult<T> {
-        EntryRef::new(&self.inner, ByteRange(position, position + size_of::<T>()))
+        ConstructReference::new(&self.inner, ByteRange(position, position + size_of::<T>()))
     }
 
     /// Clones the allocated memory region into a new `MemoryStorage`.
@@ -1042,9 +1020,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// access previously stored data from any existing references will cause
     /// undefined behavior.
     pub unsafe fn clear(&mut self) {
-        WritableInner::write_named(&self.inner.tracker, LockTarget::SegmentTracker)
-            .unwrap()
-            .clear();
+        WritableInner::write(&self.inner.tracker).unwrap().clear();
     }
 
     /// Marks the provided `region` of the container as free, allowing new data
@@ -1066,7 +1042,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// container and then trying to access previously stored data from
     /// overlapping regions will cause undefined behavior.
     pub unsafe fn clear_region(&mut self, region: ByteRange) {
-        WritableInner::write_named(&self.inner.tracker, LockTarget::SegmentTracker)
+        WritableInner::write(&self.inner.tracker)
             .unwrap()
             .release(region);
     }
@@ -1080,8 +1056,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// to state will not be dropped even when all of the created references go
     /// out of scope. As this method takes ownership of the container, calling
     /// it also ensures that dereferencing pointers created by
-    /// [`as_ptr`](refs::ContiguousEntryRef::as_ptr) and related
-    /// `ContiguousEntryRef` functions is guaranteed to be safe.
+    /// [`as_ptr`](refs::EntryRef::as_ptr) and related
+    /// `EntryRef` functions is guaranteed to be safe.
     ///
     /// This method isn't unsafe as leaking data doesn't cause undefined
     /// behavior.

@@ -13,7 +13,10 @@ pub struct ByteRange(
     pub usize,
 );
 
+#[allow(unused)]
 impl ByteRange {
+    pub const EMPTY: ByteRange = ByteRange(0, 0);
+
     /// Constructs a new byte range, ensuring that `from` and `to` are ordered
     /// correctly.
     pub fn new(from: usize, to: usize) -> Self {

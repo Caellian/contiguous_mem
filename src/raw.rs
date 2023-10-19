@@ -19,28 +19,6 @@ pub type BasePtr = NonNull<[u8]>;
 /// `None` for zero-sized contiguous memory, `Some` otherwise.
 pub type BaseAddress = Option<BasePtr>;
 
-pub(crate) const unsafe fn null_base(align: usize) -> BasePtr {
-    NonNull::new_unchecked(std::mem::transmute((align as *mut u8, 0usize)))
-}
-
-/// Returns a `usize` position of base address or panics if it's `None`.
-#[inline]
-pub(crate) fn base_addr_position(base: BaseAddress) -> usize {
-    base.map(|it| it.as_ptr() as *const u8 as usize)
-        .expect("base address missing")
-}
-
-#[inline]
-pub(crate) fn base_addr_capacity(base: BaseAddress) -> usize {
-    base.map(|it| unsafe { it.as_ref().len() })
-        .unwrap_or_default()
-}
-
-#[inline]
-pub(crate) unsafe fn base_addr_layout(base: BaseAddress, align: usize) -> Layout {
-    Layout::from_size_align_unchecked(base_addr_capacity(base), align)
-}
-
 #[cfg_attr(feature = "debug", derive(Debug))]
 pub struct MemoryState<Impl: ImplDetails<A>, A: ManageMemory> {
     pub base: Impl::Base,
@@ -79,16 +57,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> MemoryState<Impl, A> {
 impl<Impl: ImplDetails<A>, A: ManageMemory + Clone> Clone for MemoryState<Impl, A> {
     fn clone(&self) -> Self {
         MemoryState {
-            base: Impl::Base::from(
-                ReadableInner::read_named(&self.base, LockTarget::BaseAddress)
-                    .unwrap()
-                    .clone(),
-            ),
-            tracker: Impl::Tracker::from(
-                ReadableInner::read_named(&self.tracker, LockTarget::SegmentTracker)
-                    .unwrap()
-                    .clone(),
-            ),
+            base: Impl::Base::from(ReadableInner::read(&self.base).unwrap().clone()),
+            tracker: Impl::Tracker::from(ReadableInner::read(&self.tracker).unwrap().clone()),
             alloc: self.alloc.clone(),
         }
     }
@@ -96,7 +66,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory + Clone> Clone for MemoryState<Impl, 
 
 impl<Impl: ImplDetails<A>, A: ManageMemory> Drop for MemoryState<Impl, A> {
     fn drop(&mut self) {
-        if let Ok(base) = ReadableInner::read_named(&self.base, LockTarget::BaseAddress) {
+        if let Ok(base) = ReadableInner::read(&self.base) {
             unsafe { A::deallocate(&self.alloc, base.address, base.layout()) }
         }
     }

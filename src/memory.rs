@@ -3,13 +3,13 @@
 use core::cmp;
 use core::{alloc::Layout, ptr::NonNull};
 
-use crate::common::HasLayout;
 use crate::raw::MemoryBase;
 pub use crate::raw::{BaseAddress, BasePtr};
+use crate::types::HasLayout;
 
 #[cfg(feature = "no_std")]
 use crate::types::{vec, Vec};
-use crate::{range::ByteRange, raw::base_addr_position, MemoryError};
+use crate::{range::ByteRange, MemoryError};
 
 #[cfg(feature = "no_std")]
 pub use alloc::alloc;
@@ -165,11 +165,7 @@ impl SegmentTracker {
     /// valid until this tracker gets mutated from somewhere else.
     /// The returned value can also apply mutation on `self` via a call to
     /// [`Location::mark_occupied`].
-    pub fn peek_next(
-        &mut self,
-        base_address: BaseAddress,
-        layout: impl HasLayout,
-    ) -> Option<Location<'_>> {
+    pub fn peek_next(&mut self, base_pos: usize, layout: impl HasLayout) -> Option<Location<'_>> {
         let layout = layout.as_layout();
         if layout.size() == 0 {
             return Some(Location::zero_sized(self));
@@ -184,7 +180,7 @@ impl SegmentTracker {
             .iter()
             .enumerate()
             .filter(|(_, it)| {
-                it.offset(base_addr_position(base_address)) // absolute range
+                it.offset(base_pos) // absolute range
                     .aligned(layout.align()) // properly aligned
                     .len() // length of
                     >= layout.size()
@@ -231,12 +227,8 @@ impl SegmentTracker {
     /// It returns a [`ByteRange`] of the memory region that was marked as used
     /// if successful, otherwise `None`
     #[inline]
-    pub fn take_next(
-        &mut self,
-        base_address: BaseAddress,
-        layout: impl HasLayout,
-    ) -> Option<ByteRange> {
-        let mut location = self.peek_next(base_address, layout)?;
+    pub fn take_next(&mut self, base_pos: usize, layout: impl HasLayout) -> Option<ByteRange> {
+        let mut location = self.peek_next(base_pos, layout)?;
         location.mark_occupied();
         Some(location.usable)
     }
@@ -273,7 +265,7 @@ impl SegmentTracker {
             .iter()
             .enumerate()
             .find(|it| it.0 > region.0)
-        {
+        { 
             self.unoccupied.insert(i, region);
         } else {
             self.unoccupied.push(region);
@@ -299,13 +291,7 @@ impl core::fmt::Debug for SegmentTracker {
 
 #[cfg(test)]
 mod tests {
-    use crate::raw::null_base;
-
     use super::*;
-
-    fn mock_base(align: usize) -> BaseAddress {
-        unsafe { Some(null_base(align)) }
-    }
 
     #[test]
     fn new_allocation_tracker() {
@@ -320,7 +306,7 @@ mod tests {
         let mut tracker = SegmentTracker::new(1024);
 
         let range = tracker
-            .take_next(mock_base(8), Layout::from_size_align(32, 8).unwrap())
+            .take_next(8, Layout::from_size_align(32, 8).unwrap())
             .unwrap();
         assert_eq!(range, ByteRange(0, 32));
 
@@ -333,7 +319,7 @@ mod tests {
         let mut tracker = SegmentTracker::new(1024);
 
         let layout = Layout::from_size_align(128, 8).unwrap();
-        let range = tracker.take_next(mock_base(8), layout).unwrap();
+        let range = tracker.take_next(8, layout).unwrap();
         assert_eq!(range, ByteRange(0, 128));
     }
 }
@@ -644,11 +630,11 @@ where
     D::Target: ManageMemory,
 {
     fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
-        (*self).allocate(layout)
+        self.deref().allocate(layout)
     }
 
     unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
-        (*self).deallocate(address, layout)
+        self.deref().deallocate(address, layout)
     }
 
     unsafe fn shrink(
@@ -657,7 +643,7 @@ where
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<BaseAddress, MemoryError> {
-        (*self).shrink(address, old_layout, new_layout)
+        self.deref().shrink(address, old_layout, new_layout)
     }
 
     unsafe fn grow(
@@ -666,6 +652,6 @@ where
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<BaseAddress, MemoryError> {
-        (*self).grow(address, old_layout, new_layout)
+        self.deref().grow(address, old_layout, new_layout)
     }
 }
