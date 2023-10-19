@@ -1,10 +1,11 @@
 use std::{
+    alloc::Layout,
     io::{Cursor, ErrorKind, Read, Write},
     mem::align_of,
 };
 
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
-use contiguous_mem::*;
+use contiguous_mem::{types::ImplUnsafe, *};
 
 pub enum IndexOrPtr<T> {
     Index(u32),
@@ -171,23 +172,25 @@ fn load_game_file<T: Load>(file_name: &'static str) -> T {
 }
 
 fn main() {
-    let mut data = UnsafeContiguousMemory::new_aligned(112, align_of::<Level>()).unwrap();
+    let mut data = ContiguousMemory::<ImplUnsafe>::with_layout(
+        Layout::from_size_align(112, align_of::<Level>()).unwrap(),
+    );
 
     // Create enemy lookup list.
     let enemies: &[*const Enemy] = unsafe {
         &[
-            data.push(load_game_file("enemy1.dat")).unwrap_unchecked(),
-            data.push(load_game_file("enemy2.dat")).unwrap_unchecked(),
-            data.push(load_game_file("enemy3.dat")).unwrap_unchecked(),
-            data.push(load_game_file("enemy4.dat")).unwrap_unchecked(),
+            data.push(load_game_file("enemy1.dat")),
+            data.push(load_game_file("enemy2.dat")),
+            data.push(load_game_file("enemy3.dat")),
+            data.push(load_game_file("enemy4.dat")),
         ]
     };
 
     // Create level lookup list.
     let levels: &[*mut Level] = unsafe {
         &[
-            data.push(load_game_file("level1.dat")).unwrap_unchecked(),
-            data.push(load_game_file("level2.dat")).unwrap_unchecked(),
+            data.push(load_game_file("level1.dat")),
+            data.push(load_game_file("level2.dat")),
         ]
     };
 

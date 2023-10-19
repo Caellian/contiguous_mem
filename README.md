@@ -1,7 +1,7 @@
 # contiguous_mem
 
-contiguous_mem streamlines storage and management of data stored in contiguous
-blocks of memory.
+contiguous_mem is a vector like collection that can store entries with
+heterogeneous layouts while retaining type safety at the reference level.
 
 [![Crate](https://img.shields.io/crates/v/contiguous_mem?style=for-the-badge&logo=docs.rs)](https://crates.io/crates/contiguous_mem)
 [![Documentation](https://img.shields.io/docsrs/contiguous-mem?style=for-the-badge&logo=rust)](https://docs.rs/contiguous-mem)
@@ -17,12 +17,17 @@ blocks of memory.
 
 ### Specialized implementations
 
-You can pick and choose which implementation suits your use case best allowing
-you to avoid runtime cost of synchronization and additionally memory cost of
-safely wrapping referenced data if you don't need it.
+This crate provides alternative implementations for:
 
-Default implementation keeps relative offsets of stored data which are resolved
-on access.
+- thread-safe code: `SyncContiguousMemory`
+- low level, unsafe code: `UnsafeContiguousMemory`
+
+Default implementation (`ContiguousMemory`) and `SyncContiguousMemory` return
+smart references with relative offsets of stored data, while the
+`UnsafeContiguousMemory` returns raw pointers.
+
+All implementations use a similar interface which makes it convenient to switch
+over when your scope and requirements shift.
 
 ## Use cases
 
@@ -56,6 +61,11 @@ contiguous_mem = { version = "0.4", features = ["no_std"] }
 - [`error_in_core`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/error-in-core.html)
   &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std`
   environment
+- [`allocator_api`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/allocator-api.html)
+  &lt;_nightly_&gt; - enables automatic support for custom allocators
+- `sync_impl` (default) - enables `SyncContiguousMemory` and related error code
+  implementation
+- `unsafe_impl` (default) - enables `UnsafeContiguousMemory`
 
 ### Usage
 
@@ -68,13 +78,13 @@ struct Data {
 }
 
 fn main() {
-    // Create a ContiguousMemory instance with a capacity of 1024 bytes and 1-byte alignment
-    let mut memory = ContiguousMemory::new(1024);
+    // Create a ContiguousMemory instance
+    let mut memory = ContiguousMemory::new();
 
     // Store data in the memory container
     let data = Data { value: 42 };
-    let stored_number: ContiguousMemoryRef<u64> = memory.push(22u64);
-    let stored_data: ContiguousMemoryRef<Data> = memory.push(data);
+    let stored_number: ContiguousEntryRef<u64, _> = memory.push(22u64);
+    let stored_data: ContiguousEntryRef<Data, _> = memory.push(data);
 
     // Retrieve and use the stored data
     assert_eq!(*stored_data.get(), data);

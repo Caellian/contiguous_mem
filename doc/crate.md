@@ -1,19 +1,5 @@
-contiguous_mem streamlines storage and management of data stored in contiguous
-blocks of memory.
-
-## Implementations
-
-Primary interface of the crate is the [`ContiguousMemoryStorage`] structure
-which is re-exported under following type aliases with specified implementation
-details flag:
-
-- [`ContiguousMemory`]
-- [`SyncContiguousMemory`]
-- [`UnsafeContiguousMemory`]
-
-See individual items for usage examples, as well as project
-[`examples`](https://github.com/Caellian/contiguous_mem/tree/trunk/examples)
-directory.
+contiguous_mem is a vector like collection that can store entries with
+heterogeneous layouts while retaining type safety at the reference level.
 
 ## Features
 
@@ -24,6 +10,11 @@ directory.
 - [`error_in_core`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/error-in-core.html)
   &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std`
   environment
+- [`allocator_api`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/allocator-api.html)
+  &lt;_nightly_&gt; - enables automatic support for custom allocators
+- `sync_impl` (default) - enables `SyncContiguousMemory` and related error code
+  implementation
+- `unsafe_impl` (default) - enables `UnsafeContiguousMemory`
 
 ## Contributions
 

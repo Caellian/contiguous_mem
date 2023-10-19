@@ -1,6 +1,6 @@
 #![feature(ptr_metadata)]
 
-use contiguous_mem::*;
+use contiguous_mem::{memory::DefaultMemoryManager, types::ImplDefault, *};
 
 trait Greetable {
     fn print_hello(&self);
@@ -21,13 +21,12 @@ impl Greetable for Dog {
 }
 
 fn main() {
-    let mut storage = ContiguousMemory::new(4096);
+    let mut storage = ContiguousMemory::<ImplDefault>::with_capacity(4096);
     let person1 = storage.push(Person("Joe".to_string()));
 
-    let person2: ContiguousEntryRef<dyn Greetable> =
-        storage.push(Person("Craig".to_string())).into_dyn();
+    let person2: EntryRef<dyn Greetable, _> = storage.push(Person("Craig".to_string())).into_dyn();
 
-    let dog: ContiguousEntryRef<dyn Greetable> = storage.push(Dog("Rover".to_string())).into_dyn();
+    let dog: EntryRef<dyn Greetable, _> = storage.push(Dog("Rover".to_string())).into_dyn();
 
     person1.get().print_hello();
     person2.get().print_hello();

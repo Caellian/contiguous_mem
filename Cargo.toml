@@ -1,6 +1,6 @@
 [package]
 name = "contiguous-mem"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 description = "A contiguous memory storage"
 authors = ["Tin Švagelj <tin.svagelj@live.com>"]
@@ -14,16 +14,19 @@ name = "ptr_metadata"
 path = "examples/ptr_metadata.rs"
 required-features = ["ptr_metadata"]
 
-[dependencies]
-portable-atomic = { version = "1", default-features = false, optional = true }
-spin = { version = "0.9", optional = true }
-
 [features]
-default = []
-no_std = ["dep:portable-atomic", "dep:spin"]
-debug = []
+default = ["unsafe_impl", "ptr_metadata", "debug"]
+
+no_std = [] # No-std support
+debug = [] # Enable debug attributes
+
+# Implementations
+unsafe_impl = []
+
+# Nightly features
 ptr_metadata = []
 error_in_core = []
+allocator_api = []
 
 [dev-dependencies]
 byteorder = "1.4"

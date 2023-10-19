@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rust: stable # stable, std
+            features: ""
+          - rust: stable # stable, no_std
+            features: --features no_std
+          - rust: nightly # nightly, std
+            features: --features ptr_metadata,allocator_api
+          - rust: nightly # nightly, no_std
+            features: --features ptr_metadata,error_in_core,allocator_api,no_std
+    env:
+      RUST_BACKTRACE: 1 # Emit backtraces on panics.
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          profile: minimal
+          override: true
+      - run: cargo test ${{ matrix.features }} --verbose
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          components: clippy
+          override: true
+      - run: cargo clippy --all-features -- -D warnings # Deny clippy warnings
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Miri
+        run: |
+          rustup toolchain install nightly --component miri
+          rustup override set nightly
+          cargo miri setup
+      - run: cargo miri test --all-features --verbose
