@@ -6,7 +6,8 @@ struct Data {
 }
 
 fn main() {
-    // Create a ContiguousMemory instance with a capacity of 1024 bytes and 1-byte alignment
+    // Create a ContiguousMemory instance with a capacity of 1024 bytes and
+    // 1-byte alignment
     let mut memory = ContiguousMemory::<ImplUnsafe>::with_capacity(1024);
 
     // Store data in the memory container
@@ -22,4 +23,8 @@ fn main() {
         assert!(!stored_number.is_null());
         assert_eq!(*stored_number, 22);
     }
+
+    // All stored data gets cleaned up once `memory` goes out of scope, or we
+    // can forget it existed:
+    memory.forget();
 }

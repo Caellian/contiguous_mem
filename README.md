@@ -1,7 +1,7 @@
 # contiguous_mem
 
 contiguous_mem is a vector like collection that can store entries with
-heterogeneous layouts while retaining type safety at the reference level.
+heterogeneous layouts while retaining type information at the reference level.
 
 [![Crate](https://img.shields.io/crates/v/contiguous_mem?style=for-the-badge&logo=docs.rs)](https://crates.io/crates/contiguous_mem)
 [![Documentation](https://img.shields.io/docsrs/contiguous-mem?style=for-the-badge&logo=rust)](https://docs.rs/contiguous-mem)
@@ -32,7 +32,8 @@ over when your scope and requirements shift.
 ## Use cases
 
 - Storing differently typed/sized data. ([example](./examples/default_impl.rs))
-- Ensuring stored data is placed adjacently in memory. ([example](./examples/game_loading.rs))
+- Ensuring stored data is placed adjacently in memory.
+  ([example](./examples/game_loading.rs))
   - Note that returned references are **not** contiguous, only data they refer
     to is.
 
@@ -42,14 +43,14 @@ Add the crate to your dependencies:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.4" }
+contiguous_mem = { version = "0.5" }
 ```
 
 Optionally enable `no_std` feature to use in `no_std` environment:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.4", features = ["no_std"] }
+contiguous_mem = { version = "0.5", features = ["no_std"] }
 ```
 
 ### Features

@@ -1,12 +1,12 @@
 //! Returned reference types and read/write guards.
 //!
-//! See [`ContiguousMemoryStorage::push`](crate::ContiguousMemory::push)
-//! for information on implementation specific return values.
+//! See [`ContiguousMemory::push`](crate::ContiguousMemory::push) for
+//! information on implementation specific return values.
 
 use core::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
-    ptr::{null, null_mut},
+    ptr::null_mut,
 };
 
 use crate::{
@@ -19,15 +19,12 @@ use core::marker::Unsize;
 use core::ptr::Pointee;
 
 /// A reference to an entry of type `T` stored in
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemory).
+/// [`ContiguousMemory`](crate::ContiguousMemory).
 pub struct EntryRef<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A> = ImplDefault> {
     pub(crate) inner: Impl::SharedRef<ReferenceState<T, Impl, A>>,
     #[cfg(feature = "ptr_metadata")]
     pub(crate) metadata: <T as Pointee>::Metadata,
 }
-
-/// A shorter type name for [`EntryRef`].
-pub type CERef<T, A, Impl> = EntryRef<T, A, Impl>;
 
 impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> {
     /// Returns a byte range within container memory this reference points to.
@@ -57,7 +54,7 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
             Ok(MemoryReadGuard {
                 state: self.inner.clone(),
                 #[cfg(not(feature = "ptr_metadata"))]
-                value: &*pos,
+                value: &*(pos as *const T),
                 #[cfg(feature = "ptr_metadata")]
                 value: &*core::ptr::from_raw_parts::<T>(pos as *const (), self.metadata),
             })
@@ -79,8 +76,8 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
     }
 
     /// Returns a reference to data at its current location or a
-    /// [`RegionBorrowError`] error if the represented memory region is
-    /// mutably borrowed.
+    /// [`RegionBorrowError`] error if the represented memory region is mutably
+    /// borrowed.
     pub fn try_get(&self) -> Result<MemoryReadGuard<'_, T, A, Impl>, RegionBorrowError>
     where
         T: RefSizeReq,
@@ -110,7 +107,7 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
             Ok(MemoryWriteGuard {
                 state: self.inner.clone(),
                 #[cfg(not(feature = "ptr_metadata"))]
-                value: &mut *(pos),
+                value: &mut *(pos as *mut T),
                 #[cfg(feature = "ptr_metadata")]
                 value: &mut *core::ptr::from_raw_parts_mut::<T>(pos as *mut (), self.metadata),
             })
@@ -132,8 +129,8 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
     }
 
     /// Returns a mutable reference to data at its current location or a
-    /// [`RegionBorrowError`] error if the represented memory region is
-    /// already borrowed.
+    /// [`RegionBorrowError`] error if the represented memory region is already
+    /// borrowed.
     pub fn try_get_mut(&mut self) -> Result<MemoryWriteGuard<'_, T, A, Impl>, RegionBorrowError>
     where
         T: RefSizeReq,
@@ -152,14 +149,14 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
 
         EntryRef {
             inner: unsafe {
-                // SAFETY: Reinterpretation of T to R is safe because both EntryRefs
-                // are equally sized bc T is phantom. As A and Impl of the result
-                // are the same, and Unsize requirement is satisfied, this pointer
-                // cast is safe.
+                // SAFETY: Reinterpretation of T to R is safe because both
+                // EntryRefs are equally sized bc T is phantom. As A and Impl of
+                // the result are the same, and Unsize requirement is satisfied,
+                // this pointer cast is safe.
                 //
-                // Transform would be used, but it can't see the types are equally
-                // sized due to use of type arguments.
-                std::ptr::read(
+                // Transform would be used, but it can't see the types are
+                // equally sized due to use of type arguments.
+                core::ptr::read(
                     &self.inner as *const Impl::SharedRef<ReferenceState<T, Impl, A>>
                         as *const Impl::SharedRef<ReferenceState<R, Impl, A>>,
                 )
@@ -178,7 +175,7 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
         Some(EntryRef {
             inner: unsafe {
                 // SAFETY: See EntryRef::into_dyn
-                std::ptr::read(
+                core::ptr::read(
                     &self.inner as *const Impl::SharedRef<ReferenceState<T, Impl, A>>
                         as *const Impl::SharedRef<ReferenceState<R, Impl, A>>,
                 )
@@ -194,10 +191,10 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
     ///
     /// # Safety
     ///
-    /// This function is unsafe because it assumes any `T` to implement `R`,
-    /// as the original type of stored data can be erased through
-    /// [`into_dyn`](EntryRef::into_dyn) it's impossible to check
-    /// whether the initial struct actually implements `R`.
+    /// This function is unsafe because it assumes any `T` to implement `R`, as
+    /// the original type of stored data can be erased through
+    /// [`into_dyn`](EntryRef::into_dyn) it's impossible to check whether the
+    /// initial struct actually implements `R`.
     ///
     /// Calling methods from an incorrect vtable will cause undefined behavior.
     #[cfg(feature = "ptr_metadata")]
@@ -208,7 +205,7 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
         EntryRef {
             inner: unsafe {
                 // SAFETY: See EntryRef::into_dyn
-                std::ptr::read(
+                core::ptr::read(
                     &self.inner as *const Impl::SharedRef<ReferenceState<T, Impl, A>>
                         as *const Impl::SharedRef<ReferenceState<R, Impl, A>>,
                 )
@@ -226,10 +223,10 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
     /// segment to be moved.
     ///
     /// When the reference goes out of scope, its region will be marked as free
-    /// which means that a subsequent call to [`ContiguousMemoryStorage::push`]
+    /// which means that a subsequent call to [`ContiguousMemory::push`]
     /// or friends can cause undefined behavior when dereferencing the pointer.
     ///
-    /// [`ContiguousMemoryStorage::push`]: crate::ContiguousMemory::push
+    /// [`ContiguousMemory::push`]: crate::ContiguousMemory::push
     pub unsafe fn as_ptr(&self) -> *const T
     where
         T: RefSizeReq,
@@ -241,9 +238,9 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
     ///
     /// # Safety
     ///
-    /// In addition to concerns noted in [`EntryRef::as_ptr`],
-    /// this function also provides mutable access to the underlying data
-    /// allowing potential data races.
+    /// In addition to concerns noted in [`EntryRef::as_ptr`], this function
+    /// also provides mutable access to the underlying data allowing potential
+    /// data races.
     pub unsafe fn as_ptr_mut(&self) -> *mut T
     where
         T: RefSizeReq,
@@ -253,7 +250,7 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
 
         #[cfg(not(feature = "ptr_metadata"))]
         {
-            pos
+            pos as *mut T
         }
         #[cfg(feature = "ptr_metadata")]
         {
@@ -276,14 +273,14 @@ impl<T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A>> EntryRef<T, A, Impl> 
         self.into_ptr_mut() as *const T
     }
 
-    /// Creates a mutable pointer to underlying data while also preventing
-    /// the occupied memory region from being marked as free.
+    /// Creates a mutable pointer to underlying data while also preventing the
+    /// occupied memory region from being marked as free.
     ///
     /// # Safety
     ///
-    /// In addition to concerns noted in
-    /// [`EntryRef::into_ptr`], this function also provides
-    /// mutable access to the underlying data allowing potential data races.
+    /// In addition to concerns noted in [`EntryRef::into_ptr`], this function
+    /// also provides mutable access to the underlying data allowing potential
+    /// data races.
     pub unsafe fn into_ptr_mut(self) -> *mut T
     where
         T: RefSizeReq,
@@ -304,8 +301,6 @@ impl<T: ?Sized, A: ManageMemory> Clone for EntryRef<T, A> {
             inner: self.inner.clone(),
             #[cfg(feature = "ptr_metadata")]
             metadata: self.metadata,
-            #[cfg(not(feature = "ptr_metadata"))]
-            _phantom: PhantomData,
         }
     }
 }
@@ -323,8 +318,6 @@ where
 }
 
 pub(crate) mod state {
-    use crate::{memory::ManageMemory, raw::MemoryState};
-
     use super::*;
 
     /// Internal state of [`EntryRef`].
@@ -368,14 +361,19 @@ use state::*;
 /// Used for modelling XOR borrow semantics at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowState {
+    /// The memory is being immutably accessed.
+    ///
+    /// The value of `0` represents number of immutable references crated to
+    /// memory location.
     Read(usize),
+    /// The memory is being mutably accessed.
     Write,
 }
 
 /// Size requirements for types pointed to by references
 ///
-/// This is a sealed marker trait that allows `ptr_metadata` to control
-/// whether Reference
+/// This is a sealed marker trait that allows `ptr_metadata` to control whether
+/// Reference
 #[cfg(feature = "ptr_metadata")]
 pub trait RefSizeReq: Sealed {}
 #[cfg(feature = "ptr_metadata")]
@@ -406,7 +404,7 @@ impl<T, A: ManageMemory> ConstructReference<T, A, ImplDefault> for EntryRef<T, A
             inner: Reference::new(ReferenceState {
                 state: state.clone(),
                 range,
-                borrow_kind: std::cell::Cell::new(BorrowState::Read(0)),
+                borrow_kind: core::cell::Cell::new(BorrowState::Read(0)),
                 drop_fn: drop_fn::<T>(),
                 _phantom: PhantomData,
             }),
@@ -430,8 +428,8 @@ impl<T, A: ManageMemory> ConstructReference<T, A, ImplUnsafe> for *mut T {
     }
 }
 
-/// A smart reference wrapper responsible for tracking and managing a flag
-/// that indicates whether the memory segment is actively being written to.
+/// A smart reference wrapper responsible for tracking and managing a flag that
+/// indicates whether the memory segment is actively being written to.
 #[cfg_attr(feature = "debug", derive(Debug))]
 pub struct MemoryWriteGuard<'a, T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A> = ImplDefault>
 {
@@ -466,8 +464,8 @@ impl<'a, T: ?Sized, Impl: ImplReferencing<A>, A: ManageMemory> Drop
     }
 }
 
-/// A smart reference wrapper responsible for tracking and managing a flag
-/// that indicates whether the memory segment is actively being read from.
+/// A smart reference wrapper responsible for tracking and managing a flag that
+/// indicates whether the memory segment is actively being read from.
 #[cfg_attr(feature = "debug", derive(Debug))]
 pub struct MemoryReadGuard<'a, T: ?Sized, A: ManageMemory, Impl: ImplReferencing<A> = ImplDefault> {
     state: Impl::SharedRef<ReferenceState<T, Impl, A>>,

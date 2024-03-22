@@ -20,7 +20,7 @@ pub mod types;
 // Re-exports
 pub use error::*;
 use reference::ConstructReference;
-pub use reference::{CERef, EntryRef};
+pub use reference::EntryRef;
 
 use core::mem::align_of;
 use core::{
@@ -41,8 +41,15 @@ use types::*;
 ///
 /// # Examples
 ///
+/// ## Default Implementation
+///
 /// ```
 #[doc = include_str!("../examples/default_impl.rs")]
+/// ```
+///
+/// ## Unsafe Implementation
+/// ```
+#[doc = include_str!("../examples/unsafe_impl.rs")]
 /// ```
 pub struct ContiguousMemory<
     Impl: ImplDetails<A> = ImplDefault,
@@ -471,24 +478,15 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     pub fn try_grow_to(&mut self, new_capacity: usize) -> Result<Option<MemoryBase>, MemoryError> {
         let mut base = WritableInner::write(&self.inner.base).unwrap();
 
-        let old_capacity = base.size();
         let new_capacity = WritableInner::write(&self.inner.tracker)
             .unwrap()
             .grow(new_capacity);
-        if new_capacity == old_capacity {
+        if new_capacity == base.size() {
             return Ok(None);
         };
 
-        let old_layout = base.layout();
-        let new_layout = Layout::from_size_align(new_capacity, base.alignment())
-            .map_err(|_| MemoryError::TooLarge)?;
-
         let prev_base = *base;
-        base.address = unsafe {
-            self.inner
-                .alloc
-                .grow(prev_base.address, old_layout, new_layout)?
-        };
+        base.address = unsafe { self.inner.alloc.grow(prev_base, new_capacity)? };
 
         Ok(if base.address != prev_base.address {
             Some(*base)
@@ -560,9 +558,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Grows the underlying memory to ensure container has a free segment that
-    /// can store `capacity`.
-    /// This function might allocate more than requested amount of memory to
-    /// reduce number of reallocations.
+    /// can store `capacity`. This function might allocate more than requested
+    /// amount of memory to reduce number of reallocations.
     ///
     /// If the base address changed due to reallocation, new [`BasePtr`] is
     /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
@@ -585,9 +582,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Tries growing the underlying memory to ensure container has a free
-    /// segment that can store `capacity`.
-    /// This function might allocate more than requested amount of memory to
-    /// reduce number of reallocations.
+    /// segment that can store `capacity`. This function might allocate more
+    /// than requested amount of memory to reduce number of reallocations.
     ///
     /// If the base address changed due to reallocation, new [`BasePtr`] is
     /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
@@ -612,8 +608,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
     /// result is `Ok(None)`.
     ///
-    /// After calling this function, new capacity will be equal to:
-    /// `self.size() + capacity`.
+    /// After calling this function, new capacity will be equal to: `self.size()
+    /// + capacity`.
     ///
     /// # Panics
     ///
@@ -654,8 +650,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
     /// allocate required memory, a [`MemoryError`] is returned.
     ///
-    /// After calling this function, new capacity will be equal to:
-    /// `self.size() + capacity`.
+    /// After calling this function, new capacity will be equal to: `self.size()
+    /// + capacity`.
     ///
     /// # Examples
     /// ```
@@ -686,9 +682,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Grows the underlying memory to ensure container has a free segment that
-    /// can store a value with provided `layout`.
-    /// This function might allocate more than requested amount of memory to
-    /// reduce number of reallocations.
+    /// can store a value with provided `layout`. This function might allocate
+    /// more than requested amount of memory to reduce number of reallocations.
     ///
     /// If the base address changed due to reallocation, new [`BasePtr`] is
     /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
@@ -711,9 +706,9 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Tries growing the underlying memory to ensure container has a free
-    /// segment that can store a value with provided `layout`.
-    /// This function might allocate more than requested amount of memory to
-    /// reduce number of reallocations.
+    /// segment that can store a value with provided `layout`. This function
+    /// might allocate more than requested amount of memory to reduce number of
+    /// reallocations.
     ///
     /// If the base address changed due to reallocation, new [`BasePtr`] is
     /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
@@ -768,8 +763,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
     /// allocate required memory, a [`MemoryError`] is returned.
     ///
-    /// After calling this function, new capacity will be equal to:
-    /// `self.size() + padding + layout.size()`.
+    /// After calling this function, new capacity will be equal to: `self.size()
+    /// + padding + layout.size()`.
     pub fn try_reserve_layout_exact(
         &mut self,
         layout: impl HasLayout,
@@ -791,24 +786,12 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         let mut tracker = WritableInner::write(&self.inner.tracker).unwrap();
         let new_capacity = tracker.shrink(new_capacity);
         let mut base = WritableInner::write(&self.inner.base).unwrap();
-
-        let old_layout = self.layout();
-        if new_capacity == old_layout.size() {
+        if new_capacity == base.size() {
             return *base;
         }
-        let new_layout = unsafe {
-            // SAFETY: Previous layout was valid and had valid alignment,
-            // new one is smaller with same alignment so it must be
-            // valid as well.
-            Layout::from_size_align_unchecked(new_capacity, old_layout.align())
-        };
 
-        base.address = unsafe {
-            self.inner
-                .alloc
-                .shrink(base.address, self.layout(), new_layout)
-        }
-        .expect("unable to shrink the container");
+        base.address = unsafe { self.inner.alloc.shrink(*base, new_capacity) }
+            .expect("unable to shrink the container");
 
         *base
     }
@@ -824,19 +807,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
             Some(it) => it,
             None => return *base,
         };
-        let old_layout = self.layout();
-        let new_layout = unsafe {
-            // SAFETY: Previous layout was valid and had valid alignment,
-            // new one is smaller with same alignment so it must be
-            // valid as well.
-            Layout::from_size_align_unchecked(new_capacity, old_layout.align())
-        };
-        base.address = unsafe {
-            self.inner
-                .alloc
-                .shrink(base.address, self.layout(), new_layout)
-        }
-        .expect("unable to shrink the container");
+        base.address = unsafe { self.inner.alloc.shrink(*base, new_capacity) }
+            .expect("unable to shrink the container");
 
         *base
     }
@@ -967,14 +939,14 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         result
     }
 
-    /// Assumes value is stored at the provided _relative_ `position` in
-    /// managed memory and returns a pointer or a reference to it.
+    /// Assumes value is stored at the provided _relative_ `position` in managed
+    /// memory and returns a pointer or a reference to it.
     ///
     /// # Safety
     ///
     /// This function isn't unsafe because creating an invalid pointer isn't
-    /// considered unsafe. Responsibility for guaranteeing safety falls on
-    /// code that's dereferencing the pointer.
+    /// considered unsafe. Responsibility for guaranteeing safety falls on code
+    /// that's dereferencing the pointer.
     pub fn assume_stored<T>(&self, position: usize) -> Impl::PushResult<T> {
         ConstructReference::new(&self.inner, ByteRange(position, position + size_of::<T>()))
     }
@@ -994,7 +966,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
             Some(base) => unsafe {
                 core::ptr::copy_nonoverlapping(
                     base.as_ptr() as *const (),
-                    result.base().as_ptr_mut_unchecked() as *mut (),
+                    result.base().as_ptr_mut_unchecked(),
                     current_layout.size(),
                 );
             },
@@ -1006,8 +978,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         result
     }
 
-    /// Marks the entire contents of the container as free, allowing new data
-    /// to be stored in place of previously stored data.
+    /// Marks the entire contents of the container as free, allowing new data to
+    /// be stored in place of previously stored data.
     ///
     /// This allows clearing persisted entries created with
     /// [`ContiguousMemory::push_persisted`] and
@@ -1056,12 +1028,12 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// to state will not be dropped even when all of the created references go
     /// out of scope. As this method takes ownership of the container, calling
     /// it also ensures that dereferencing pointers created by
-    /// [`as_ptr`](refs::EntryRef::as_ptr) and related
-    /// `EntryRef` functions is guaranteed to be safe.
+    /// [`as_ptr`](EntryRef::as_ptr) and related [`EntryRef`] functions is
+    /// guaranteed to be safe.
     ///
     /// This method isn't unsafe as leaking data doesn't cause undefined
-    /// behavior.
-    /// ([_see details_](https://doc.rust-lang.org/nomicon/leaking.html))
+    /// behavior. ([_see
+    /// details_](https://doc.rust-lang.org/nomicon/leaking.html))
     pub fn forget(self) -> MemoryBase {
         let base = self.base();
         core::mem::forget(self);

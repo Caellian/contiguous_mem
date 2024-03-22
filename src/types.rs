@@ -23,6 +23,7 @@ pub use core::error::Error;
 use core::{
     cell::UnsafeCell,
     convert::Infallible, alloc::Layout, ops::{Deref, DerefMut},
+    fmt::Debug,
 };
 #[cfg(all(not(feature = "error_in_core"), not(feature = "no_std")))]
 pub use std::error::Error;
@@ -34,7 +35,7 @@ use crate::{reference::{state::ReferenceState, BorrowState, EntryRef}, memory::{
 /// All implemented functions should be `#[inline]`d to ensure that final code
 /// behaves as if this abstraction didn't exist.
 /// 
-/// This allows different [`ContigousMemory`](crate::ContigousMemory)
+/// This allows different [`ContigousMemory`](crate::ContiguousMemory)
 /// implementation details to use the same code base while staying correct for
 /// the strictest one.
 pub trait ReadableInner<T: ?Sized> {
@@ -47,13 +48,27 @@ pub trait ReadableInner<T: ?Sized> {
     where
         Self: 'a;
     
-    
+    /// Error returned when calling [`read`](ReadableInner::read) or
+    /// [`try_read`](ReadableInner::try_read) fails.
     #[cfg(not(any(feature = "error_in_core", not(feature = "no_std"))))]
-    type BorrowError;
+    type BorrowError: Debug;
+    /// Error returned when calling [`read`](ReadableInner::read) or
+    /// [`try_read`](ReadableInner::try_read) fails.
     #[cfg(any(feature = "error_in_core", not(feature = "no_std")))]
     type BorrowError: Error;
 
+    /// Returns the [read guard](ReadableInner::ReadGuard) for `T` if the
+    /// wrapped readable can be read, or an [error](ReadableInner::BorrowError)
+    /// if that's not possible (usually due to container being poisoned).
+    /// 
+    /// This method will block for implementations of concurrent containers
+    /// (such as `Mutex`), for non-blocking access use
+    /// [`try_read`](ReadableInner::try_read).
     fn read(&self) -> Result<Self::ReadGuard<'_>, Self::BorrowError>;
+    /// Returns the [read guard](ReadableInner::ReadGuard) for `T` if the
+    /// wrapped readable can be read, or an [error](ReadableInner::BorrowError)
+    /// if it's being mutably accessed from somewhere else or if read isn't
+    /// possible (usually due to container being poisoned).
     fn try_read(&self) -> Result<Self::ReadGuard<'_>, Self::BorrowError> {
         self.read()
     }
@@ -72,13 +87,30 @@ pub trait WritableInner<T: ?Sized>: ReadableInner<T> {
     where
         Self: 'a;
 
+    /// Error returned when calling [`write`](WritableInner::write) or
+    /// [`try_write`](WritableInner::try_write) fails.
     #[cfg(not(any(feature = "error_in_core", not(feature = "no_std"))))]
-    type MutBorrowError;
+    type MutBorrowError: Debug;
+    /// Error returned when calling [`write`](WritableInner::write) or
+    /// [`try_write`](WritableInner::try_write) fails.
     #[cfg(any(feature = "error_in_core", not(feature = "no_std")))]
     type MutBorrowError: Error;
 
+    /// Returns the [write guard](WritableInner::WriteGuard) for `T` if the
+    /// wrapped writable can be written to, or an
+    /// [error](WritableInner::MutBorrowError) if that's not possible (usually
+    /// due to container being poisoned).
+    /// 
+    /// This method will block for implementations of concurrent containers
+    /// (such as `Mutex`), for non-blocking access use
+    /// [`try_write`](WritableInner::try_write).
     fn write(&self)
         -> Result<Self::WriteGuard<'_>, Self::MutBorrowError>;
+    /// Returns the [write guard](WritableInner::WriteGuard) for `T` if the
+    /// wrapped writable can be written to, or an
+    /// [error](WritableInner::MutBorrowError) if it's being mutably accessed
+    /// from somewhere else or if write isn't possible (usually due to container
+    /// being poisoned).
     fn try_write(
         &self,
     ) -> Result<Self::WriteGuard<'_>, Self::MutBorrowError> {
@@ -112,7 +144,7 @@ impl<T: Copy> WritableInner<T> for core::cell::Cell<T> {
     fn write(
         &self,
     ) -> Result<Self::WriteGuard<'_>, Infallible> {
-        Ok(CellWriteGuard { parent: &self, value: self.get() })
+        Ok(CellWriteGuard { parent: self, value: self.get() })
     }
 }
 impl<T: ?Sized> ReadableInner<T> for core::cell::RefCell<T> {
@@ -171,30 +203,25 @@ impl<T: ?Sized> WritableInner<T> for UnsafeCell<T> {
 }
 
 /// A fake [`Reference`]-like wrapper for [unsafe implementation](ImplUnsafe)
-/// state.
+/// state and [`Cell`](core::cell::Cell).
 /// 
-/// As a directly owned value doesn't implement a [`Deref`], this wrapper fills
-/// that gap so no matter the implementation details, the state wrapper can be
-/// dereferenced into inner value.
+/// As an owned value `T` doesn't implement a [`Deref`], this wrapper fills that
+/// gap in order to unify implementation details.
 #[derive(Debug)]
 #[repr(transparent)]
-#[cfg(feature = "unsafe_impl")]
 pub struct Owned<T>(pub(crate) T);
-#[cfg(feature = "unsafe_impl")]
 impl<T> From<T> for Owned<T> {
     fn from(value: T) -> Self {
         Owned(value)
     }
 }
-#[cfg(feature = "unsafe_impl")]
-impl<T> std::ops::Deref for Owned<T> {
+impl<T> core::ops::Deref for Owned<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-#[cfg(feature = "unsafe_impl")]
 impl<T> DerefMut for Owned<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
@@ -259,10 +286,9 @@ pub(crate) mod sealed {
 }
 pub(crate) use sealed::Sealed;
 
-/// Implementation details shared between [storage](StorageDetails) and
-/// [`reference`](ReferenceDetails) implementations.
+/// Implementation details shared between memory container and reference types.
 pub trait ImplDetails<A: ManageMemory>: Sized {
-    /// A reference to internal state
+    /// A reference to internal state.
     type StateRef<T>: Reference<T>;
 
     /// A wrapper for [`MemoryBase`].
@@ -271,29 +297,29 @@ pub trait ImplDetails<A: ManageMemory>: Sized {
     /// A wrapper for [`SegmentTracker`].
     type Tracker: WritableInner<SegmentTracker> + From<SegmentTracker>;
 
+    /// Reference type returned when data is pushed into this implementation.
     type PushResult<T>: ConstructReference<T, A, Self>;
 
+    /// Indicates whether this implementation is allowed to grow.
     const GROW: bool = true;
 }
 
-/// Implementation that's not thread-safe but performs faster as it avoids
-/// mutexes and locks.
-///
-/// For example usage of default implementation see: [`ContiguousMemory`](crate::ContiguousMemory)
+/// Default implementation that uses [`std::cell::RefCell`] for storage and
+/// [`Rc`] for state references.
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ImplDefault;
 impl<A: ManageMemory> ImplDetails<A> for ImplDefault {
     type StateRef<T> = Rc<T>;
-    type Base = std::cell::RefCell<MemoryBase>;
-    type Tracker = std::cell::RefCell<SegmentTracker>;
+    type Base = core::cell::RefCell<MemoryBase>;
+    type Tracker = core::cell::RefCell<SegmentTracker>;
     type PushResult<T> = EntryRef<T, A>;
 }
 
 /// Implementation which provides direct (unsafe) access to stored entries.
-///
-/// For example usage of default implementation see:
-/// [`UnsafeContiguousMemory`](crate::UnsafeContiguousMemory)
+/// 
+/// Uses [`Cell`](std::cell::Cell) for storage and the stored data is [`Owned`]
+/// by the caller.
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg(feature = "unsafe_impl")]
@@ -301,18 +327,19 @@ pub struct ImplUnsafe;
 #[cfg(feature = "unsafe_impl")]
 impl<A: ManageMemory> ImplDetails<A> for ImplUnsafe {
     type StateRef<T> = Owned<T>;
-    type Base = std::cell::Cell<MemoryBase>;
+    type Base = core::cell::Cell<MemoryBase>;
     type Tracker = UnsafeCell<SegmentTracker>;
     type PushResult<T> = *mut T;
 
     const GROW: bool = false;
 }
 
+/// Represents contigous memory that uses smart references.
 pub trait ImplReferencing<A: ManageMemory>: ImplDetails<A> {
     /// The type handling concurrent mutable access exclusion.
     type BorrowLock: WritableInner<BorrowState>;
 
-    /// A shared reference to data
+    /// A shared reference to data.
     type SharedRef<T>: Reference<T> + Clone;
 
     /// Marks reference state as no longer being borrowed.
@@ -320,7 +347,7 @@ pub trait ImplReferencing<A: ManageMemory>: ImplDetails<A> {
 }
 
 impl<A: ManageMemory> ImplReferencing<A> for ImplDefault {
-    type BorrowLock = std::cell::Cell<BorrowState>;
+    type BorrowLock = core::cell::Cell<BorrowState>;
 
     type SharedRef<T> = Rc<T>;
 
@@ -333,12 +360,12 @@ impl<A: ManageMemory> ImplReferencing<A> for ImplDefault {
     }
 }
 
-/// Returns [`Pointee`] metadata for provided pair of struct `S` and some
-/// unsized type (e.g. a trait) `T`.
+/// Returns [`Pointee`](core::ptr::Pointee) metadata for provided pair of struct
+/// `S` and some unsized type (e.g. a trait) `T`.
 ///
-/// This metadata is usually a pointer to vtable of `T` implementation for
-/// `S`, but can be something else and the value is considered internal to
-/// the compiler.
+/// This metadata is usually a pointer to vtable of `T` implementation for `S`,
+/// but can be something else and the value is considered internal to the
+/// compiler.
 #[cfg(feature = "ptr_metadata")]
 pub const fn static_metadata<S, T: ?Sized>() -> <T as core::ptr::Pointee>::Metadata
 where
@@ -365,8 +392,8 @@ pub(crate) const fn is_layout_valid(size: usize, align: usize) -> bool {
     size <= isize::MAX as usize - (align - 1)
 }
 
-/// Trait that unifies passing either a [`Layout`] directly or a `&T` where
-/// `T: Sized` as an argument to a function which requires a type layout.
+/// Trait that unifies passing either a [`Layout`] directly or a `&T` where `T:
+/// Sized` as an argument to a function which requires a type layout.
 ///
 /// This trait is sealed to prevent users from implementing it for arbitrary
 /// types which would voilate its intention and cause bloat.

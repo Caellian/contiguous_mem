@@ -32,6 +32,10 @@ impl<T> IndexOrPtr<T> {
 }
 
 pub trait Load {
+    /// # Safety
+    /// 
+    /// Loading is unsafe, that's why the game is so fun - you don't know
+    /// whether you'll be able to continue playing if you ever stop.
     unsafe fn load<R: Read>(data: R) -> Self;
 }
 pub trait Save {
@@ -177,22 +181,18 @@ fn main() {
     );
 
     // Create enemy lookup list.
-    let enemies: &[*const Enemy] = unsafe {
-        &[
-            data.push(load_game_file("enemy1.dat")),
-            data.push(load_game_file("enemy2.dat")),
-            data.push(load_game_file("enemy3.dat")),
-            data.push(load_game_file("enemy4.dat")),
-        ]
-    };
+    let enemies: &[*const Enemy] = &[
+        data.push(load_game_file("enemy1.dat")),
+        data.push(load_game_file("enemy2.dat")),
+        data.push(load_game_file("enemy3.dat")),
+        data.push(load_game_file("enemy4.dat")),
+    ];
 
     // Create level lookup list.
-    let levels: &[*mut Level] = unsafe {
-        &[
-            data.push(load_game_file("level1.dat")),
-            data.push(load_game_file("level2.dat")),
-        ]
-    };
+    let levels: &[*mut Level] = &[
+        data.push(load_game_file("level1.dat")),
+        data.push(load_game_file("level2.dat")),
+    ];
 
     // data won't go out of scope while we're using it in this example, but in
     // your use case it might. This is here for completeness.

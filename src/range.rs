@@ -15,6 +15,7 @@ pub struct ByteRange(
 
 #[allow(unused)]
 impl ByteRange {
+    /// An empty byte range.
     pub const EMPTY: ByteRange = ByteRange(0, 0);
 
     /// Constructs a new byte range, ensuring that `from` and `to` are ordered
@@ -80,7 +81,7 @@ impl ByteRange {
         self.1 - self.0
     }
 
-    /// Returns true if this byte range is zero-sized.
+    /// Returns `true` if this byte range is zero-sized.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0 == self.1
@@ -106,8 +107,8 @@ impl ByteRange {
         ByteRange(self.0.min(other.0), self.1.max(other.1))
     }
 
-    /// Merges another `other` byte range into this one, resulting in a byte
-    /// range that contains both.
+    /// Merges `other` byte range into this one, resulting in a byte range that
+    /// contains both.
     pub fn apply_union_unchecked(&mut self, other: Self) {
         self.0 = self.0.min(other.0);
         self.1 = self.1.max(other.1);

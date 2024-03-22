@@ -3,8 +3,7 @@
 use core::cmp;
 use core::{alloc::Layout, ptr::NonNull};
 
-use crate::raw::MemoryBase;
-pub use crate::raw::{BaseAddress, BasePtr};
+pub use crate::raw::{BaseAddress, BasePtr, MemoryBase};
 use crate::types::HasLayout;
 
 #[cfg(feature = "no_std")]
@@ -21,9 +20,9 @@ use alloc::Allocator;
 
 /// A structure that keeps track of unoccupied regions of memory.
 ///
-/// This is used by [`ContiguousMemory`] to manage
-/// positions of stored items while preventing overlap of assigned regions and
-/// proper alignment of stored data.
+/// This is used by [`ContiguousMemory`] to manage positions of stored items
+/// while preventing overlap of assigned regions and proper alignment of stored
+/// data.
 ///
 /// # Placement strategy
 ///
@@ -112,7 +111,7 @@ impl SegmentTracker {
         let reduction = self.size - new_size;
         let reduction = cmp::min(reduction, last.len());
         last.1 -= reduction;
-        if last.len() == 0 {
+        if last.is_empty() {
             self.unoccupied.pop();
         }
         self.size -= reduction;
@@ -137,9 +136,9 @@ impl SegmentTracker {
         Some(self.size)
     }
 
-    /// Returns `true` if the provided type `layout` can ne stored within any
+    /// Returns `true` if the provided type `layout` can be stored within any
     /// unused segments of the represented memory region.
-    pub fn can_store(&self, base_address: MemoryBase, layout: impl HasLayout) -> bool {
+    pub fn can_store(&self, base: MemoryBase, layout: impl HasLayout) -> bool {
         let layout = layout.as_layout();
         if layout.size() == 0 {
             return true;
@@ -148,7 +147,7 @@ impl SegmentTracker {
         }
 
         self.unoccupied.iter().enumerate().any(|(_, it)| {
-            it.offset(base_address.pos_or_align()) // absolute range
+            it.offset(base.pos_or_align()) // absolute range
                 .aligned(layout.align()) // aligned to value
                 .len()
                 >= layout.size()
@@ -162,8 +161,8 @@ impl SegmentTracker {
     /// represented memory region, `None` is returned instead.
     ///
     /// This function mutably borrows because the returned `Location` is only
-    /// valid until this tracker gets mutated from somewhere else.
-    /// The returned value can also apply mutation on `self` via a call to
+    /// valid until this tracker gets mutated from somewhere else. The returned
+    /// value can also apply mutation on `self` via a call to
     /// [`Location::mark_occupied`].
     pub fn peek_next(&mut self, base_pos: usize, layout: impl HasLayout) -> Option<Location<'_>> {
         let layout = layout.as_layout();
@@ -189,12 +188,7 @@ impl SegmentTracker {
 
         let available = found_range.aligned(layout.align()).cap_size(layout.size());
 
-        Some(Location::new(
-            self,
-            found_position,
-            found_range.clone(),
-            available,
-        ))
+        Some(Location::new(self, found_position, *found_range, available))
     }
 
     /// Returns either a start position of a free byte range at the end of the
@@ -265,7 +259,7 @@ impl SegmentTracker {
             .iter()
             .enumerate()
             .find(|it| it.0 > region.0)
-        { 
+        {
             self.unoccupied.insert(i, region);
         } else {
             self.unoccupied.push(region);
@@ -297,7 +291,7 @@ mod tests {
     fn new_allocation_tracker() {
         let tracker = SegmentTracker::new(1024);
         assert_eq!(tracker.size(), 1024);
-        assert_eq!(tracker.is_full(), false);
+        assert!(!tracker.is_full());
         assert_eq!(tracker.whole_range(), ByteRange(0, 1024));
     }
 
@@ -311,7 +305,7 @@ mod tests {
         assert_eq!(range, ByteRange(0, 32));
 
         tracker.release(range);
-        assert_eq!(tracker.is_full(), false);
+        assert!(!tracker.is_full());
     }
 
     #[test]
@@ -324,9 +318,8 @@ mod tests {
     }
 }
 
-/// A result of [`SegmentTracker::peek_next`] which contains information
-/// about available allocation slot and wherein a certain [`Layout`] could be
-/// placed.
+/// A result of [`SegmentTracker::peek_next`] which contains information about
+/// available allocation slot and wherein a certain [`Layout`] could be placed.
 ///
 /// `'a` is the lifetime of the [`SegmentTracker`] that produced this struct.
 /// The reference is stored because it prevents any mutations from ocurring on
@@ -382,13 +375,13 @@ impl<'a> Location<'a> {
         self.usable
     }
 
-    /// Returns `true` if the pointed to location is zero-sized.
+    /// Returns `true` if the pointed-to location is zero-sized.
     #[inline]
     pub fn is_zero_sized(&self) -> bool {
-        self.usable.len() == 0
+        self.usable.is_empty()
     }
 
-    /// Marks the pointed to location as occupied.
+    /// Marks the pointed-to location as occupied.
     pub fn mark_occupied(&mut self) {
         if self.is_zero_sized() {
             return;
@@ -438,16 +431,14 @@ pub trait ManageMemory {
     /// `layout` argument.
     fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError>;
 
-    /// Deallocates a block of memory of provided `layout` at the specified
-    /// `address`.
+    /// Deallocates a block of memory of provided `base`.
     ///
     /// # Safety
     ///
     /// See: [alloc::Allocator::deallocate]
-    unsafe fn deallocate(&self, address: BaseAddress, layout: Layout);
+    unsafe fn deallocate(&self, base: MemoryBase);
 
-    /// Shrinks the container underlying memory from `old_layout` size to
-    /// `new_layout`.
+    /// Shrinks the provided memory slice to `new_size`.
     ///
     /// Generally doesn't cause a move, but an implementation can choose to do
     /// so.
@@ -455,25 +446,14 @@ pub trait ManageMemory {
     /// # Safety
     ///
     /// See: [alloc::Allocator::shrink]
-    unsafe fn shrink(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError>;
+    unsafe fn shrink(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError>;
 
-    /// Grows the container underlying memory from `old_layout` size to
-    /// `new_layout`.
+    /// Grows the provided memory slice to `new_size`.
     ///
     /// # Safety
     ///
     /// See: [alloc::Allocator::grow]
-    unsafe fn grow(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError>;
+    unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError>;
 }
 
 /// Default [memory manager](ManageMemory) that uses the methods exposed by
@@ -494,50 +474,46 @@ impl ManageMemory for DefaultMemoryManager {
         }
     }
 
-    unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
-        if let Some(it) = address {
-            alloc::dealloc(it.as_ptr() as *mut u8, layout);
+    unsafe fn deallocate(&self, base: MemoryBase) {
+        if let MemoryBase {
+            address: Some(it), ..
+        } = base
+        {
+            alloc::dealloc(it.as_ptr() as *mut u8, base.layout());
         }
     }
 
-    unsafe fn shrink(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        match address {
-            Some(it) => Ok(if new_layout.size() > 0 {
-                Some(NonNull::from(core::slice::from_raw_parts(
-                    alloc::realloc(it.as_ptr() as *mut u8, old_layout, new_layout.size()),
-                    new_layout.size(),
-                )))
-            } else {
-                alloc::dealloc(it.as_ptr() as *mut u8, old_layout);
-                None
+    unsafe fn shrink(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
+        match base.address {
+            Some(it) => Ok({
+                if new_size > 0 {
+                    Some(NonNull::from(core::slice::from_raw_parts(
+                        alloc::realloc(it.as_ptr() as *mut u8, base.layout(), new_size),
+                        new_size,
+                    )))
+                } else {
+                    alloc::dealloc(it.as_ptr() as *mut u8, base.layout());
+                    None
+                }
             }),
             None => Ok(None),
         }
     }
 
-    unsafe fn grow(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        match address {
+    unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
+        match base.address {
             Some(it) => Ok(Some(NonNull::from(core::slice::from_raw_parts(
-                alloc::realloc(it.as_ptr() as *mut u8, old_layout, new_layout.size()),
-                new_layout.size(),
+                alloc::realloc(it.as_ptr() as *mut u8, base.layout(), new_size),
+                new_size,
             )))),
             None => Ok({
-                if new_layout.size() == 0 {
+                if new_size == 0 {
                     None
                 } else {
+                    let new_layout = Layout::from_size_align(new_size, base.alignment())?;
                     Some(NonNull::from(core::slice::from_raw_parts(
                         alloc::alloc(new_layout),
-                        new_layout.size(),
+                        new_size,
                     )))
                 }
             }),
@@ -557,29 +533,27 @@ impl<A: Allocator> ManageMemory for A {
         }
     }
 
-    unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
-        if let Some(allocated) = address {
-            Allocator::deallocate(
-                self,
-                NonNull::new_unchecked(allocated.as_ptr() as *mut u8),
-                layout,
-            )
+    unsafe fn deallocate(&self, base: MemoryBase) {
+        if base.is_allocated() {
+            unsafe {
+                Allocator::deallocate(
+                    self,
+                    NonNull::new_unchecked(base.as_ptr_mut()),
+                    base.layout(),
+                )
+            }
         }
     }
 
-    unsafe fn shrink(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        match address {
+    unsafe fn shrink(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
+        match base.address {
             Some(it) => {
-                if new_layout.size() > 0 {
+                if new_size > 0 {
+                    let new_layout = Layout::from_size_align(new_size, base.alignment())?;
                     Allocator::shrink(
                         self,
                         NonNull::new_unchecked(it.as_ptr() as *mut u8),
-                        old_layout,
+                        base.layout(),
                         new_layout,
                     )
                     .map(Some)
@@ -588,7 +562,7 @@ impl<A: Allocator> ManageMemory for A {
                     Allocator::deallocate(
                         self,
                         NonNull::new_unchecked(it.as_ptr() as *mut u8),
-                        old_layout,
+                        base.layout(),
                     );
                     Ok(None)
                 }
@@ -597,25 +571,24 @@ impl<A: Allocator> ManageMemory for A {
         }
     }
 
-    unsafe fn grow(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        match address {
-            Some(it) => Allocator::grow(
-                self,
-                NonNull::new_unchecked(it.as_ptr() as *mut u8),
-                old_layout,
-                new_layout,
-            )
-            .map(Some)
-            .map_err(MemoryError::from),
+    unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
+        match base.address {
+            Some(it) => {
+                let new_layout = Layout::from_size_align(new_size, base.alignment())?;
+                Allocator::grow(
+                    self,
+                    NonNull::new_unchecked(it.as_ptr() as *mut u8),
+                    base.layout(),
+                    new_layout,
+                )
+                .map(Some)
+                .map_err(MemoryError::from)
+            }
             None => {
-                if new_layout.size() == 0 {
+                if new_size == 0 {
                     Ok(None)
                 } else {
+                    let new_layout = Layout::from_size_align(new_size, base.alignment())?;
                     Allocator::allocate(self, new_layout)
                         .map(Some)
                         .map_err(MemoryError::from)
@@ -625,6 +598,7 @@ impl<A: Allocator> ManageMemory for A {
     }
 }
 
+#[cfg(not(feature = "allocator_api"))]
 impl<D: core::ops::Deref> ManageMemory for D
 where
     D::Target: ManageMemory,
@@ -633,25 +607,15 @@ where
         self.deref().allocate(layout)
     }
 
-    unsafe fn deallocate(&self, address: BaseAddress, layout: Layout) {
-        self.deref().deallocate(address, layout)
+    unsafe fn deallocate(&self, base: MemoryBase) {
+        self.deref().deallocate(base)
     }
 
-    unsafe fn shrink(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        self.deref().shrink(address, old_layout, new_layout)
+    unsafe fn shrink(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
+        self.deref().shrink(base, new_size)
     }
 
-    unsafe fn grow(
-        &self,
-        address: BaseAddress,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<BaseAddress, MemoryError> {
-        self.deref().grow(address, old_layout, new_layout)
+    unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
+        self.deref().grow(base, new_size)
     }
 }

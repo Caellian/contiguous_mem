@@ -15,10 +15,17 @@ path = "examples/ptr_metadata.rs"
 required-features = ["ptr_metadata"]
 
 [features]
-default = ["unsafe_impl", "ptr_metadata", "debug"]
+default = [
+    "no_std",
+    "unsafe_impl",
+    "debug",
+    "ptr_metadata",
+    "error_in_core",
+    "allocator_api",
+]
 
 no_std = [] # No-std support
-debug = [] # Enable debug attributes
+debug = []  # Enable debug attributes
 
 # Implementations
 unsafe_impl = []

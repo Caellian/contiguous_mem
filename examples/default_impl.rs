@@ -17,4 +17,8 @@ fn main() {
     // Retrieve and use the stored data
     assert_eq!(*stored_data.get(), data);
     assert_eq!(*stored_number.get(), 22);
+
+    // All stored data gets cleaned up once `memory` goes out of scope, or we
+    // can forget it existed:
+    memory.forget();
 }

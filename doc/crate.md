@@ -1,5 +1,5 @@
 contiguous_mem is a vector like collection that can store entries with
-heterogeneous layouts while retaining type safety at the reference level.
+heterogeneous layouts while retaining type information at the reference level.
 
 ## Features
 

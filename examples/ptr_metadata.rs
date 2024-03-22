@@ -1,6 +1,6 @@
 #![feature(ptr_metadata)]
 
-use contiguous_mem::{memory::DefaultMemoryManager, types::ImplDefault, *};
+use contiguous_mem::{types::ImplDefault, *};
 
 trait Greetable {
     fn print_hello(&self);

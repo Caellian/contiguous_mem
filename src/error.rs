@@ -3,19 +3,14 @@
 #[cfg(any(feature = "error_in_core", not(feature = "no_std")))]
 use crate::types::Error;
 
+use core::fmt::Debug;
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
 use core::fmt::{Display, Formatter, Result as FmtResult};
-use core::{cell::Ref, fmt::Debug};
 
-use crate::{
-    memory::ManageMemory,
-    range::ByteRange,
-    reference::BorrowState,
-    types::{ImplDetails, ImplReferencing, ReadableInner, WritableInner},
-};
+use crate::{range::ByteRange, reference::BorrowState};
 
 /// Represents a class of errors returned by invalid memory operations and
-/// allocator failiure.
+/// allocator failure.
 #[derive(Debug, Clone, Copy)]
 pub enum MemoryError {
     /// Tried allocating container capacity larger than `isize::MAX`
@@ -23,9 +18,17 @@ pub enum MemoryError {
     /// Allocation failure caused by either resource exhaustion or invalid
     /// arguments being provided to an allocator.
     Allocator(
-        #[cfg(feature = "allocator_api")] core::alloc::AllocError,
+        /// Cause allocator error.
+        #[cfg(feature = "allocator_api")]
+        core::alloc::AllocError,
         #[cfg(not(feature = "allocator_api"))] (),
     ),
+}
+
+impl From<core::alloc::LayoutError> for MemoryError {
+    fn from(_: core::alloc::LayoutError) -> Self {
+        Self::TooLarge
+    }
 }
 
 #[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
@@ -59,8 +62,8 @@ impl From<core::alloc::AllocError> for MemoryError {
     }
 }
 
-/// Error returned when concurrent mutable access is attempted to the same
-/// memory region.
+/// Error returned when concurrent mutable access to the same memory region is
+/// attempted.
 #[derive(Debug)]
 pub struct RegionBorrowError {
     /// Range that was attempted to be borrowed.

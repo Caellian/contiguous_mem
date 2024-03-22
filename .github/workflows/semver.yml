@@ -18,6 +18,6 @@ jobs:
         uses: baptiste0928/cargo-install@v2
         with:
           crate: cargo-semver-checks
-          version: "^0.23"
+          version: "^0.30"
       - name: Run semver check
         run: cargo semver-checks check-release
