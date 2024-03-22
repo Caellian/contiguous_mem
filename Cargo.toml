@@ -10,19 +10,22 @@ categories = ["data-structures", "memory-management", "no-std"]
 repository = "https://github.com/Caellian/contiguous_mem"
 
 [[example]]
+name = "game_loading"
+path = "examples/game_loading.rs"
+required-features = ["unsafe_impl"]
+
+[[example]]
 name = "ptr_metadata"
 path = "examples/ptr_metadata.rs"
 required-features = ["ptr_metadata"]
 
+[[example]]
+name = "unsafe_impl"
+path = "examples/unsafe_impl.rs"
+required-features = ["unsafe_impl"]
+
 [features]
-default = [
-    "no_std",
-    "unsafe_impl",
-    "debug",
-    "ptr_metadata",
-    "error_in_core",
-    "allocator_api",
-]
+default = ["unsafe_impl", "debug"]
 
 no_std = [] # No-std support
 debug = []  # Enable debug attributes

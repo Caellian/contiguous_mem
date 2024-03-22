@@ -3,26 +3,46 @@ name: ci
 on:
   pull_request:
   push:
-    branches:
-      - master
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - rust: stable # stable, std
-            features: ""
-          - rust: stable # stable, no_std
-            features: --features no_std
-          - rust: nightly # nightly, std
-            features: --features ptr_metadata,allocator_api
-          - rust: nightly # nightly, no_std
-            features: --features ptr_metadata,error_in_core,allocator_api,no_std
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: ["stable", "nightly"]
+        no_std: [true, false]
+        debug: [true, false]
+        unsafe_impl: [true, false]
+        ptr_metadata: [true, false]
+        error_in_core: [true, false]
+        allocator_api: [true, false]
+        exclude:
+          - rust: stable
+            ptr_metadata: true
+          - rust: stable
+            error_in_core: true
+          - rust: stable
+            allocator_api: true
+          # no point in testing nightly with unstable features disabled
+          - rust: nightly
+            ptr_metadata: false
+          - rust: nightly
+            error_in_core: false
+          - rust: nightly
+            allocator_api: false
+    runs-on: ${{ matrix.os }}
+    name: |
+      test - ${{ matrix.os }}; ${{ matrix.rust }} rust; features: {
+        no_std: ${{ matrix.no_std }},
+        debug: ${{ matrix.debug }},
+        unsafe_impl: ${{ matrix.unsafe_impl }},
+        ptr_metadata: ${{ matrix.ptr_metadata }},
+        error_in_core: ${{ matrix.error_in_core }},
+        allocator_api: ${{ matrix.allocator_api }}
+      }
     env:
       RUST_BACKTRACE: 1 # Emit backtraces on panics.
     steps:
@@ -32,10 +52,23 @@ jobs:
           toolchain: ${{ matrix.rust }}
           profile: minimal
           override: true
-      - run: cargo test ${{ matrix.features }} --verbose
+      - if: matrix.no_std == true
+        run: echo "FEATURES=$FEATURES,no_std" >> $GITHUB_ENV
+      - if: matrix.debug == true
+        run: echo "FEATURES=$FEATURES,debug" >> $GITHUB_ENV
+      - if: matrix.unsafe_impl == true
+        run: echo "FEATURES=$FEATURES,unsafe_impl" >> $GITHUB_ENV
+      - if: matrix.ptr_metadata == true
+        run: echo "FEATURES=$FEATURES,ptr_metadata" >> $GITHUB_ENV
+      - if: matrix.error_in_core == true
+        run: echo "FEATURES=$FEATURES,error_in_core" >> $GITHUB_ENV
+      - if: matrix.allocator_api == true
+        run: echo "FEATURES=$FEATURES,allocator_api" >> $GITHUB_ENV
+      - run: cargo test --no-default-features --features=${{ env.FEATURES }} --verbose
 
   lint:
     runs-on: ubuntu-latest
+    needs: test
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -48,11 +81,15 @@ jobs:
 
   miri:
     runs-on: ubuntu-latest
+    needs: test
     steps:
       - uses: actions/checkout@v3
       - name: Install Miri
-        run: |
-          rustup toolchain install nightly --component miri
-          rustup override set nightly
-          cargo miri setup
-      - run: cargo miri test --all-features --verbose
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          components: miri
+          override: true
+      - run: cargo miri setup
+      - run: cargo miri test --all-features --verbose --color=always

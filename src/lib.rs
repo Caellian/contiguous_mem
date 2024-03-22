@@ -3,7 +3,7 @@
 #![cfg_attr(feature = "ptr_metadata", feature(ptr_metadata, unsize))]
 #![cfg_attr(feature = "error_in_core", feature(error_in_core))]
 #![cfg_attr(feature = "allocator_api", feature(allocator_api))]
-#![cfg_attr(doc, feature(doc_auto_cfg))]
+#![cfg_attr(all(doc, feature = "NIGHTLY"), feature(doc_auto_cfg))]
 #![warn(missing_docs)]
 #![doc = include_str!("../doc/crate.md")]
 
@@ -67,7 +67,7 @@ impl<Impl: ImplDetails<DefaultMemoryManager>> ContiguousMemory<Impl> {
     /// # #![allow(unused_mut)]
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut storage = ContiguousMemory::new();
+    /// let mut storage: ContiguousMemory = ContiguousMemory::new();
     /// ```
     pub fn new() -> Self {
         Self {
@@ -93,7 +93,7 @@ impl<Impl: ImplDetails<DefaultMemoryManager>> ContiguousMemory<Impl> {
     /// # #![allow(unused_mut)]
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut storage = ContiguousMemory::with_capacity(1024);
+    /// let mut storage: ContiguousMemory = ContiguousMemory::with_capacity(1024);
     /// # assert_eq!(storage.capacity(), 1024);
     /// # assert_eq!(storage.align(), core::mem::align_of::<usize>());
     /// ```
@@ -124,7 +124,7 @@ impl<Impl: ImplDetails<DefaultMemoryManager>> ContiguousMemory<Impl> {
     /// use core::alloc::Layout;
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut storage = ContiguousMemory::with_layout(
+    /// let mut storage: ContiguousMemory = ContiguousMemory::with_layout(
     ///     Layout::from_size_align(512, align_of::<u32>()).unwrap()
     /// );
     /// # assert_eq!(storage.capacity(), 512);
@@ -151,7 +151,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use contiguous_mem::ContiguousMemory;
     /// use contiguous_mem::memory::DefaultMemoryManager;
     ///
-    /// let mut storage = ContiguousMemory::with_alloc(
+    /// let mut storage: ContiguousMemory = ContiguousMemory::with_alloc(
     ///     DefaultMemoryManager
     /// );
     /// # assert_eq!(storage.capacity(), 0);
@@ -181,7 +181,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use contiguous_mem::ContiguousMemory;
     /// use contiguous_mem::memory::DefaultMemoryManager;
     ///
-    /// let mut storage = ContiguousMemory::with_capacity_and_alloc(
+    /// let mut storage: ContiguousMemory = ContiguousMemory::with_capacity_and_alloc(
     ///     256,
     ///     DefaultMemoryManager
     /// );
@@ -218,7 +218,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use contiguous_mem::ContiguousMemory;
     /// use contiguous_mem::memory::DefaultMemoryManager;
     ///
-    /// let mut storage = ContiguousMemory::with_layout_and_alloc(
+    /// let mut storage: ContiguousMemory = ContiguousMemory::with_layout_and_alloc(
     ///     Layout::from_size_align(0, align_of::<u32>()).unwrap(),
     ///     DefaultMemoryManager
     /// );
@@ -234,17 +234,17 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         }
     }
 
-    /// Returns the base address of the allocated memory.
+    /// Returns the [`MemoryBase`] of the container.
     ///
     /// # Examples
     /// ```
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
-    /// assert_eq!(s.base(), None);
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
+    /// assert!(!s.base().is_allocated());
     ///
     /// let r = s.push(6);
-    /// assert_eq!(s.base().is_some(), true);
+    /// assert!(s.base().is_allocated());
     /// ```
     pub fn base(&self) -> MemoryBase {
         *ReadableInner::read(&self.inner.base).expect("can't read base")
@@ -258,7 +258,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use core::ptr::null;
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     /// assert_eq!(s.base_ptr(), null());
     ///
     /// let r = s.push(3);
@@ -279,7 +279,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     /// assert_eq!(s.capacity(), 0);
     ///
     /// let r1 = s.push(1u8);
@@ -305,7 +305,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     /// assert_eq!(s.size(), 0);
     ///
     /// let r1 = s.push(1u8);
@@ -335,7 +335,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use core::mem::align_of;
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     /// assert_eq!(s.align(), align_of::<usize>());
     /// ```
     #[inline]
@@ -351,7 +351,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use core::mem::align_of;
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     /// assert_eq!(
     ///     s.layout(),
     ///     Layout::from_size_align(0, align_of::<usize>()).unwrap()
@@ -373,7 +373,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     /// assert_eq!(s.can_push_t::<u32>(), false);
     ///
     /// let r1 = s.push(1u32);
@@ -398,7 +398,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use core::alloc::Layout;
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     ///
     /// let r1 = s.push([0u32; 4]);
     ///
@@ -430,7 +430,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::with_capacity(4);
+    /// let mut s: ContiguousMemory = ContiguousMemory::with_capacity(4);
     /// assert_eq!(s.capacity(), 4);
     /// assert_eq!(s.size(), 0);
     ///
@@ -462,7 +462,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     ///
     /// assert!(s.try_grow_to(1024).is_ok());
     ///
@@ -620,7 +620,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::with_capacity(4);
+    /// let mut s: ContiguousMemory = ContiguousMemory::with_capacity(4);
     /// assert_eq!(s.capacity(), 4);
     ///
     /// let r = s.push(1u32);
@@ -657,7 +657,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     /// use contiguous_mem::ContiguousMemory;
     ///
-    /// let mut s = ContiguousMemory::new();
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
     ///
     /// assert!(s.try_reserve_exact(1024).is_ok());
     /// assert_eq!(s.capacity(), 1024);
@@ -879,13 +879,13 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// # use contiguous_mem::memory::DefaultMemoryManager;
     /// # use core::alloc::Layout;
     /// # use core::mem;
-    /// # let mut storage = ContiguousMemory::new();
+    /// # let mut storage: ContiguousMemory = ContiguousMemory::new();
     /// let value = vec!["ignore", "drop", "for", "me"];
     /// let erased = &value as *const Vec<&str> as *const ();
     /// let layout = Layout::new::<Vec<&str>>();
     ///
     /// // Reference type arguments must be fully specified.
-    /// let stored: CERef<Vec<&str>, DefaultMemoryManager> = unsafe {
+    /// let stored: EntryRef<Vec<&str>, DefaultMemoryManager> = unsafe {
     ///     mem::transmute(storage.push_raw(erased, layout))
     /// };
     /// ```
