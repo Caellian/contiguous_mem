@@ -46,11 +46,11 @@ use types::*;
 /// ```
 #[doc = include_str!("../examples/default_impl.rs")]
 /// ```
-///
-/// ## Unsafe Implementation
-/// ```
-#[doc = include_str!("../examples/unsafe_impl.rs")]
-/// ```
+#[cfg_attr(feature = "unsafe_impl", doc = "")]
+#[cfg_attr(feature = "unsafe_impl", doc = "## Unsafe Implementation")]
+#[cfg_attr(feature = "unsafe_impl", doc = "```")]
+#[cfg_attr(feature = "unsafe_impl", doc = include_str!("../examples/unsafe_impl.rs"))]
+#[cfg_attr(feature = "unsafe_impl", doc = "```")]
 pub struct ContiguousMemory<
     Impl: ImplDetails<A> = ImplDefault,
     A: ManageMemory = DefaultMemoryManager,
@@ -463,7 +463,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use contiguous_mem::ContiguousMemory;
     ///
     /// let mut s: ContiguousMemory = ContiguousMemory::new();
-    /// 
+    ///
     /// assert!(s.try_grow_to(1024).is_ok());
     ///
     /// let required_size: usize = usize::MAX; // bad read?

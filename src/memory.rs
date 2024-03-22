@@ -236,7 +236,8 @@ impl SegmentTracker {
     ///
     /// ```
     /// # use contiguous_mem::range::ByteRange;
-    /// # use contiguous_mem::memory::{alloc::Layout, SegmentTracker};
+    /// # use contiguous_mem::memory::SegmentTracker;
+    /// # use core::alloc::Layout;
     /// let mut tracker = SegmentTracker::new(1024);
     ///
     /// let layout = Layout::from_size_align(128, 8).unwrap();
@@ -263,7 +264,8 @@ impl SegmentTracker {
     /// # Examples
     /// ```
     /// # use contiguous_mem::range::ByteRange;
-    /// # use contiguous_mem::memory::{alloc::Layout, SegmentTracker};
+    /// # use contiguous_mem::memory::SegmentTracker;
+    /// # use core::alloc::Layout;
     /// let mut tracker = SegmentTracker::new(1024);
     ///
     /// let range = tracker
