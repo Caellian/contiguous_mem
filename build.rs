@@ -8,6 +8,6 @@ fn main() {
         .stdout;
     let version = String::from_utf8_lossy(&output);
     if version.contains("nightly") {
-        println!("cargo:rustc-cfg=NIGHTLY")
+        println!("cargo:rustc-cfg=nightly")
     }
 }

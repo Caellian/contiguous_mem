@@ -38,6 +38,9 @@ ptr_metadata = []
 error_in_core = []
 allocator_api = []
 
+[dependencies]
+sptr = "0.3.2"
+
 [dev-dependencies]
 byteorder = "1.4"
 

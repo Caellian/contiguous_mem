@@ -1,9 +1,12 @@
 #![allow(incomplete_features)]
+#![allow(unstable_name_collisions)]
 #![cfg_attr(feature = "no_std", no_std)]
 #![cfg_attr(feature = "ptr_metadata", feature(ptr_metadata, unsize))]
 #![cfg_attr(feature = "error_in_core", feature(error_in_core))]
 #![cfg_attr(feature = "allocator_api", feature(allocator_api))]
-#![cfg_attr(all(doc, feature = "NIGHTLY"), feature(doc_auto_cfg))]
+#![cfg_attr(all(doc, nightly), feature(doc_auto_cfg))]
+#![cfg_attr(nightly, feature(strict_provenance))]
+#![cfg_attr(nightly, warn(fuzzy_provenance_casts))]
 #![warn(missing_docs)]
 #![doc = include_str!("../doc/crate.md")]
 
@@ -465,10 +468,17 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// let mut s: ContiguousMemory = ContiguousMemory::new();
     ///
     /// assert!(s.try_grow_to(1024).is_ok());
+    /// ```
+    ///
+    /// The method returns an error if the system can't reserve requested
+    /// memory:
+    /// ```should_panic
+    /// # use contiguous_mem::ContiguousMemory;
+    /// # let mut s: ContiguousMemory = ContiguousMemory::new();
     ///
     /// let required_size: usize = usize::MAX; // bad read?
     /// // can't allocate all addressable memory
-    /// assert!(s.try_grow_to(required_size).is_err());
+    /// assert!(s.try_grow_to(required_size).is_ok()); // PANIC!
     /// ```
     pub fn try_grow_to(&mut self, new_capacity: usize) -> Result<Option<MemoryBase>, MemoryError> {
         let mut base = WritableInner::write(&self.inner.base).unwrap();
@@ -480,10 +490,10 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
             return Ok(None);
         };
 
-        let prev_base = *base;
-        base.address = unsafe { self.inner.alloc.grow(prev_base, new_capacity)? };
+        let new_addr = unsafe { self.inner.alloc.grow(*base, new_capacity)? };
 
-        Ok(if base.address != prev_base.address {
+        Ok(if new_addr != base.address {
+            base.address = new_addr;
             Some(*base)
         } else {
             None
@@ -656,15 +666,17 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     ///
     /// assert!(s.try_reserve_exact(1024).is_ok());
     /// assert_eq!(s.capacity(), 1024);
+    /// ```
     ///
-    /// let el_count: usize = 42;
-    /// let el_size: usize = 288230376151711744; // bad read?
+    /// The method returns an error if the system can't reserve requested
+    /// memory:
+    /// ```should_panic
+    /// # use contiguous_mem::ContiguousMemory;
+    /// # let mut s: ContiguousMemory = ContiguousMemory::new();
     ///
-    /// let mut required_size: usize = 0;
-    /// for i in 0..el_count {
-    ///     required_size += el_size;
-    /// }
-    /// assert!(s.try_reserve_exact(required_size).is_err());
+    /// let required_size: usize = usize::MAX; // bad read?
+    /// // can't allocate all addressable memory
+    /// assert!(s.try_reserve_exact(required_size).is_ok()); // PANIC!
     /// ```
     pub fn try_reserve_exact(
         &mut self,

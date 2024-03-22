@@ -462,8 +462,8 @@ pub trait ManageMemory {
     unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError>;
 }
 
-unsafe fn some_non_null_slice(data: *const u8, len: usize) -> Option<NonNull<[u8]>> {
-    Some(NonNull::from(core::slice::from_raw_parts(data, len)))
+unsafe fn some_non_null_slice(data: *mut u8, len: usize) -> Option<NonNull<[u8]>> {
+    Some(NonNull::from(core::slice::from_raw_parts_mut(data, len)))
 }
 
 /// Default [memory manager](ManageMemory) that uses the methods exposed by

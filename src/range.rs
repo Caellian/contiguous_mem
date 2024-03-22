@@ -2,6 +2,9 @@
 
 use core::fmt::Display;
 
+#[cfg(not(nightly))]
+use sptr::Strict;
+
 use crate::raw::BaseAddress;
 
 /// Represents a range of bytes.
@@ -133,12 +136,12 @@ impl ByteRange {
 
     #[inline]
     pub(crate) fn offset_base<T>(&self, addr: BaseAddress) -> Option<*mut T> {
-        addr.map(|it| (it.as_ptr() as *mut u8 as usize + self.0) as *mut T)
+        addr.map(|it| (it.as_ptr() as *const u8).map_addr(|addr| addr + self.0) as *mut T)
     }
 
     #[inline]
     pub(crate) unsafe fn offset_base_unwrap<T>(&self, addr: BaseAddress) -> *mut T {
-        (unsafe { addr.unwrap_unchecked().as_ptr() } as *mut u8 as usize + self.0) as *mut T
+        (addr.unwrap_unchecked().as_ptr() as *mut u8).map_addr(|addr| addr + self.0) as *mut T
     }
 }
 
