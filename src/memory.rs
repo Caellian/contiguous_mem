@@ -47,7 +47,18 @@ pub struct SegmentTracker {
 }
 
 impl SegmentTracker {
-    /// Constructs a new `SegmentTracker` of the provided `size`.
+    /// Constructs a new empty `SegmentTracker` of the provided `size`.
+    ///
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::memory::SegmentTracker;
+    /// # use contiguous_mem::range::ByteRange;
+    /// let tracker = SegmentTracker::new(1024);
+    ///
+    /// assert!(!tracker.is_full());
+    /// assert_eq!(tracker.size(), 1024);
+    /// assert_eq!(tracker.whole_range(), ByteRange(0, 1024));
+    /// ```
     pub fn new(size: usize) -> Self {
         SegmentTracker {
             size,
@@ -220,6 +231,19 @@ impl SegmentTracker {
     ///
     /// It returns a [`ByteRange`] of the memory region that was marked as used
     /// if successful, otherwise `None`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use contiguous_mem::range::ByteRange;
+    /// # use contiguous_mem::memory::{alloc::Layout, SegmentTracker};
+    /// let mut tracker = SegmentTracker::new(1024);
+    ///
+    /// let layout = Layout::from_size_align(128, 8).unwrap();
+    /// let range = tracker.take_next(8, layout).unwrap();
+    ///
+    /// assert_eq!(range, ByteRange(0, 128));
+    /// ```
     #[inline]
     pub fn take_next(&mut self, base_pos: usize, layout: impl HasLayout) -> Option<ByteRange> {
         let mut location = self.peek_next(base_pos, layout)?;
@@ -235,6 +259,21 @@ impl SegmentTracker {
     /// * the provided region falls outside of the memory tracked by the
     ///   `SegmentTracker`, or
     /// * the provided region is in part or whole already marked as free.
+    ///
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::range::ByteRange;
+    /// # use contiguous_mem::memory::{alloc::Layout, SegmentTracker};
+    /// let mut tracker = SegmentTracker::new(1024);
+    ///
+    /// let range = tracker
+    ///     .take_next(8, Layout::from_size_align(32, 8).unwrap())
+    ///     .unwrap();
+    /// assert_eq!(range, ByteRange(0, 32));
+    ///
+    /// tracker.release(range);
+    /// assert!(!tracker.is_full());
+    /// ```
     pub fn release(&mut self, region: ByteRange) {
         if region.is_empty() {
             return;
@@ -280,41 +319,6 @@ impl core::fmt::Debug for SegmentTracker {
             .field("size", &self.size)
             .field("unused", &self.unoccupied)
             .finish()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_allocation_tracker() {
-        let tracker = SegmentTracker::new(1024);
-        assert_eq!(tracker.size(), 1024);
-        assert!(!tracker.is_full());
-        assert_eq!(tracker.whole_range(), ByteRange(0, 1024));
-    }
-
-    #[test]
-    fn take_and_release_allocation_tracker() {
-        let mut tracker = SegmentTracker::new(1024);
-
-        let range = tracker
-            .take_next(8, Layout::from_size_align(32, 8).unwrap())
-            .unwrap();
-        assert_eq!(range, ByteRange(0, 32));
-
-        tracker.release(range);
-        assert!(!tracker.is_full());
-    }
-
-    #[test]
-    fn take_next_allocation_tracker() {
-        let mut tracker = SegmentTracker::new(1024);
-
-        let layout = Layout::from_size_align(128, 8).unwrap();
-        let range = tracker.take_next(8, layout).unwrap();
-        assert_eq!(range, ByteRange(0, 128));
     }
 }
 
@@ -456,22 +460,27 @@ pub trait ManageMemory {
     unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError>;
 }
 
+unsafe fn some_non_null_slice(data: *const u8, len: usize) -> Option<NonNull<[u8]>> {
+    Some(NonNull::from(core::slice::from_raw_parts(data, len)))
+}
+
 /// Default [memory manager](ManageMemory) that uses the methods exposed by
 /// [`alloc`] module.
 #[derive(Clone, Copy)]
 pub struct DefaultMemoryManager;
 impl ManageMemory for DefaultMemoryManager {
     fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
-        if layout.size() == 0 {
-            Ok(None)
+        Ok(if layout.size() == 0 {
+            None
         } else {
             unsafe {
-                Ok(Some(NonNull::from(core::slice::from_raw_parts(
-                    alloc::alloc(layout),
-                    layout.size(),
-                ))))
+                let data = alloc::alloc(layout);
+                if data.is_null() {
+                    return Err(MemoryError::TooLarge);
+                }
+                some_non_null_slice(data, layout.size())
             }
-        }
+        })
     }
 
     unsafe fn deallocate(&self, base: MemoryBase) {
@@ -484,40 +493,45 @@ impl ManageMemory for DefaultMemoryManager {
     }
 
     unsafe fn shrink(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
-        match base.address {
-            Some(it) => Ok({
+        Ok(match base.address {
+            Some(it) => {
                 if new_size > 0 {
-                    Some(NonNull::from(core::slice::from_raw_parts(
-                        alloc::realloc(it.as_ptr() as *mut u8, base.layout(), new_size),
-                        new_size,
-                    )))
+                    let data = alloc::realloc(it.as_ptr() as *mut u8, base.layout(), new_size);
+                    if data.is_null() {
+                        return Err(MemoryError::TooLarge);
+                    }
+                    some_non_null_slice(data, new_size)
                 } else {
                     alloc::dealloc(it.as_ptr() as *mut u8, base.layout());
                     None
                 }
-            }),
-            None => Ok(None),
-        }
+            }
+            None => None,
+        })
     }
 
     unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
-        match base.address {
-            Some(it) => Ok(Some(NonNull::from(core::slice::from_raw_parts(
-                alloc::realloc(it.as_ptr() as *mut u8, base.layout(), new_size),
-                new_size,
-            )))),
-            None => Ok({
+        Ok(match base.address {
+            Some(it) => {
+                let data = alloc::realloc(it.as_ptr() as *mut u8, base.layout(), new_size);
+                if data.is_null() {
+                    return Err(MemoryError::TooLarge);
+                }
+                some_non_null_slice(data, new_size)
+            }
+            None => {
                 if new_size == 0 {
                     None
                 } else {
                     let new_layout = Layout::from_size_align(new_size, base.alignment())?;
-                    Some(NonNull::from(core::slice::from_raw_parts(
-                        alloc::alloc(new_layout),
-                        new_size,
-                    )))
+                    let data = alloc::alloc(new_layout);
+                    if data.is_null() {
+                        return Err(MemoryError::TooLarge);
+                    }
+                    some_non_null_slice(data, new_size)
                 }
-            }),
-        }
+            }
+        })
     }
 }
 

@@ -13,7 +13,8 @@ use crate::{range::ByteRange, reference::BorrowState};
 /// allocator failure.
 #[derive(Debug, Clone, Copy)]
 pub enum MemoryError {
-    /// Tried allocating container capacity larger than `isize::MAX`
+    /// Tried allocating memory chunk larger than [`isize::MAX`] or what is
+    /// currently available.
     TooLarge,
     /// Allocation failure caused by either resource exhaustion or invalid
     /// arguments being provided to an allocator.

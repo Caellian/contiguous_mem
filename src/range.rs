@@ -103,6 +103,23 @@ impl ByteRange {
 
     /// Merges this byte range with `other` and returns a byte range that
     /// contains both.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use contiguous_mem::range::ByteRange;
+    /// let a = ByteRange::new_unchecked(0, 10);
+    /// let b = ByteRange::new_unchecked(10, 20);
+    ///
+    /// let added_seq = a.union_unchecked(b);
+    /// assert_eq!(added_seq.0, 0);
+    /// assert_eq!(added_seq.1, 20);
+    ///
+    /// // range union is symmetrical
+    /// let added_seq_rev = b.union_unchecked(a);
+    /// assert_eq!(added_seq_rev.0, 0);
+    /// assert_eq!(added_seq_rev.1, 20);
+    /// ```
     pub fn union_unchecked(&self, other: Self) -> Self {
         ByteRange(self.0.min(other.0), self.1.max(other.1))
     }
@@ -128,24 +145,5 @@ impl ByteRange {
 impl Display for ByteRange {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "[{:x}, {:x})", self.0, self.1)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn byterange_merging_works() {
-        let a = ByteRange::new_unchecked(0, 10);
-        let b = ByteRange::new_unchecked(10, 20);
-
-        let added_seq = a.union_unchecked(b);
-        assert_eq!(added_seq.0, 0);
-        assert_eq!(added_seq.1, 20);
-
-        let added_seq_rev = b.union_unchecked(a);
-        assert_eq!(added_seq_rev.0, 0);
-        assert_eq!(added_seq_rev.1, 20);
     }
 }

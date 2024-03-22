@@ -463,16 +463,11 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use contiguous_mem::ContiguousMemory;
     ///
     /// let mut s: ContiguousMemory = ContiguousMemory::new();
-    ///
+    /// 
     /// assert!(s.try_grow_to(1024).is_ok());
     ///
-    /// let el_count: usize = 42;
-    /// let el_size: usize = 288230376151711744; // bad read?
-    ///
-    /// let mut required_size: usize = 1024;
-    /// for i in 0..el_count {
-    ///     required_size += el_size;
-    /// }
+    /// let required_size: usize = usize::MAX; // bad read?
+    /// // can't allocate all addressable memory
     /// assert!(s.try_grow_to(required_size).is_err());
     /// ```
     pub fn try_grow_to(&mut self, new_capacity: usize) -> Result<Option<MemoryBase>, MemoryError> {
