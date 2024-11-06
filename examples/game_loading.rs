@@ -196,7 +196,7 @@ fn main() {
 
     // data won't go out of scope while we're using it in this example, but in
     // your use case it might. This is here for completeness.
-    data.forget();
+    data.leak();
     // now we can assume all created pointers are 'static
 
     // prepare levels for use

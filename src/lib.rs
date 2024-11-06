@@ -123,7 +123,7 @@ impl<Impl: ImplDetails<DefaultMemoryManager>> ContiguousMemory<Impl> {
     /// # Examples
     /// ```
     /// # #![allow(unused_mut)]
-    /// use core::mem::align_of;
+    /// # use core::mem::align_of;
     /// use core::alloc::Layout;
     /// use contiguous_mem::ContiguousMemory;
     ///
@@ -468,6 +468,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// let mut s: ContiguousMemory = ContiguousMemory::new();
     ///
     /// assert!(s.try_grow_to(1024).is_ok());
+    /// assert_eq!(s.capacity(), 1024);
     /// ```
     ///
     /// The method returns an error if the system can't reserve requested
@@ -475,7 +476,6 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```should_panic
     /// # use contiguous_mem::ContiguousMemory;
     /// # let mut s: ContiguousMemory = ContiguousMemory::new();
-    ///
     /// let required_size: usize = usize::MAX; // bad read?
     /// // can't allocate all addressable memory
     /// assert!(s.try_grow_to(required_size).is_ok()); // PANIC!
@@ -562,21 +562,35 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         self.try_grow_to(capacity + additional)
     }
 
-    /// Grows the underlying memory to ensure container has a free segment that
-    /// can store `capacity`. This function might allocate more than requested
-    /// amount of memory to reduce number of reallocations.
+    /// Like [`try_reserve`](ContiguousMemory::try_reserve), grows the
+    /// underlying memory to ensure container has a free segment that can store
+    /// `capacity`, but panics if that's not possible.
     ///
-    /// If the base address changed due to reallocation, new [`BasePtr`] is
-    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
-    /// result is `Ok(None)`.
-    ///
-    /// After calling this function, new capacity will be greater than:
-    /// `self.size() + capacity`.
+    /// See the [base implementation](ContiguousMemory::try_reserve_layout) for
+    /// more details.
     ///
     /// # Panics
     ///
     /// Panics if attempting to grow the container to a capacity larger than
     /// `isize::MAX` or the allocator can't allocate required memory.
+    ///
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::ContiguousMemory;
+    /// # use core::alloc::Layout;
+    /// let layout = Layout::from_size_align(4, 8).unwrap();
+    /// let mut s: ContiguousMemory = ContiguousMemory::with_layout(layout);
+    ///
+    /// # assert_eq!(s.size(), 0);
+    /// assert_eq!(s.capacity(), 4);
+    ///
+    /// let r1 = s.push(1u8);
+    /// assert_eq!(s.size(), 1);
+    /// assert_eq!(s.capacity(), 4);
+    ///
+    /// s.reserve(8);
+    /// assert_eq!(s.capacity(), 9);
+    /// ```
     #[inline]
     pub fn reserve(&mut self, capacity: usize) -> Option<MemoryBase> {
         match self.try_reserve(capacity) {
@@ -587,18 +601,30 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Tries growing the underlying memory to ensure container has a free
-    /// segment that can store `capacity`. This function might allocate more
-    /// than requested amount of memory to reduce number of reallocations.
+    /// segment that can store `capacity`.
     ///
-    /// If the base address changed due to reallocation, new [`BasePtr`] is
-    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
-    /// result is `Ok(None)`.
+    /// Works like [`try_reserve_layout`](ContiguousMemory::try_reserve_layout),
+    /// but doesn't account for specific alignment of the reserved segment.
+    /// Check its documentation for more details.
     ///
-    /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
-    /// allocate required memory, a [`MemoryError`] is returned.
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::ContiguousMemory;
+    /// # use core::alloc::Layout;
+    /// let layout = Layout::from_size_align(4, 8).unwrap();
+    /// let mut s: ContiguousMemory = ContiguousMemory::with_layout(layout);
+    /// # assert_eq!(s.size(), 0);
+    /// assert_eq!(s.capacity(), 4);
     ///
-    /// After calling this function, new capacity will be greater than:
-    /// `self.size() + capacity`.
+    /// let r1 = s.push(1u8);
+    /// assert_eq!(s.size(), 1);
+    /// assert_eq!(s.capacity(), 4);
+    ///
+    /// s.try_reserve(8).expect("should have enough memory");
+    /// assert_eq!(s.capacity(), 9);
+    ///
+    /// assert!(s.try_reserve(usize::MAX).is_err());
+    /// ```
     pub fn try_reserve(&mut self, capacity: usize) -> Result<Option<MemoryBase>, MemoryError> {
         if capacity == 0 {
             return Ok(None);
@@ -607,14 +633,10 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Grows the underlying memory to ensure container has a free segment that
-    /// can store `capacity`.
+    /// can store `capacity`, or panics.
     ///
-    /// If the base address changed due to reallocation, new [`BasePtr`] is
-    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
-    /// result is `Ok(None)`.
-    ///
-    /// After calling this function, new capacity will be equal to: `self.size()
-    /// + capacity`.
+    /// See the [base implementation](ContiguousMemory::try_reserve_layout) for
+    /// more details.
     ///
     /// # Panics
     ///
@@ -648,20 +670,16 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// Tries growing the underlying memory to ensure container has a free
     /// segment that can store `capacity`.
     ///
-    /// If the base address changed due to reallocation, new [`BasePtr`] is
-    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
-    /// result is `Ok(None)`.
+    /// Works much like
+    /// [`try_reserve_layout_exact`](ContiguousMemory::try_reserve_layout_exact),
+    /// but doesn't ensure a specific alignment of the reserved segment.
     ///
-    /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
-    /// allocate required memory, a [`MemoryError`] is returned.
-    ///
-    /// After calling this function, new capacity will be equal to: `self.size()
-    /// + capacity`.
+    /// See the [base implementation](ContiguousMemory::try_reserve_layout) for
+    /// more details.
     ///
     /// # Examples
     /// ```
-    /// use contiguous_mem::ContiguousMemory;
-    ///
+    /// # use contiguous_mem::ContiguousMemory;
     /// let mut s: ContiguousMemory = ContiguousMemory::new();
     ///
     /// assert!(s.try_reserve_exact(1024).is_ok());
@@ -673,7 +691,6 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```should_panic
     /// # use contiguous_mem::ContiguousMemory;
     /// # let mut s: ContiguousMemory = ContiguousMemory::new();
-    ///
     /// let required_size: usize = usize::MAX; // bad read?
     /// // can't allocate all addressable memory
     /// assert!(s.try_reserve_exact(required_size).is_ok()); // PANIC!
@@ -688,16 +705,12 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         self.ensure_free_section::<true>(capacity, None)
     }
 
-    /// Grows the underlying memory to ensure container has a free segment that
-    /// can store a value with provided `layout`. This function might allocate
-    /// more than requested amount of memory to reduce number of reallocations.
+    /// Like [`try_reserve_layout`](ContiguousMemory::try_reserve_layout), grows
+    /// the underlying memory to ensure container has a free segment that can
+    /// store a value with provided `layout`, or panics if that's not possible.
     ///
-    /// If the base address changed due to reallocation, new [`BasePtr`] is
-    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
-    /// result is `Ok(None)`.
-    ///
-    /// After calling this function, new capacity will be greater than:
-    /// `self.size() + padding + size_of::<V>()`.
+    /// See the [base implementation](ContiguousMemory::try_reserve_layout) for
+    /// more details.
     ///
     /// # Panics
     ///
@@ -713,19 +726,44 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Tries growing the underlying memory to ensure container has a free
-    /// segment that can store a value with provided `layout`. This function
-    /// might allocate more than requested amount of memory to reduce number of
-    /// reallocations.
+    /// segment that can store a value with provided `layout`.
     ///
     /// If the base address changed due to reallocation, new [`BasePtr`] is
-    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
-    /// result is `Ok(None)`.
+    /// returned as `Ok(Some(BasePtr))`, if base address remained the same
+    /// `Ok(None)` is returned.
     ///
     /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
-    /// allocate required memory, a [`MemoryError`] is returned.
+    /// allocate required memory, a [`MemoryError`] is returned. If allocating
+    /// the required capacity is expected to succeed, use the function variant
+    /// without the `try_` prefix.
+    ///
+    /// `layout` argument [type](HasLayout) can either be a [`Layout`] value
+    /// _or_ a reference to any `Sized` type.
     ///
     /// After calling this function, new capacity will be greater than:
-    /// `self.size() + padding + size_of::<V>()`.
+    /// `self.size() + padding + layout.size()`.<br/>
+    /// `padding` is preceding blank space necessary to ensure the proper
+    /// alignment of the provided layout. If ensuring alignment is not needed
+    /// (because the data is unaligned), use variants without the `_layout`
+    /// suffix.
+    ///
+    /// This function might allocate more than requested amount of memory to
+    /// reduce number of reallocations. If exact allocation is needed instead,
+    /// use variants with `_exact` suffix.
+    ///
+    /// In total, this function has 8 different variants. Use the one which best
+    /// suits your specific requirements:
+    ///
+    /// | Variant | `Err` / panic | alignment | amortized growth |
+    /// |:-|:-:|:-:|:-:|
+    /// |[`reserve`](ContiguousMemory::reserve)                                  |panic|&cross;|&check;|
+    /// |[`try_reserve`](ContiguousMemory::try_reserve)                          |`Err`|&cross;|&check;|
+    /// |[`reserve_exact`](ContiguousMemory::reserve_exact)                      |panic|&cross;|&cross;|
+    /// |[`try_reserve_exact`](ContiguousMemory::try_reserve_exact)              |`Err`|&cross;|&cross;|
+    /// |[`reserve_layout`](ContiguousMemory::reserve_layout)                    |panic|&check;|&check;|
+    /// |[`try_reserve_layout`](ContiguousMemory::try_reserve_layout)            |`Err`|&check;|&check;|
+    /// |[`reserve_layout_exact`](ContiguousMemory::reserve_layout_exact)        |panic|&check;|&cross;|
+    /// |[`try_reserve_layout_exact`](ContiguousMemory::try_reserve_layout_exact)|`Err`|&check;|&cross;|
     pub fn try_reserve_layout(
         &mut self,
         layout: impl HasLayout,
@@ -737,15 +775,14 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         self.ensure_free_section::<false>(layout.size(), Some(layout.align()))
     }
 
-    /// Grows the underlying memory to ensure container has a free segment that
-    /// can store a value with provided `layout`.
+    /// Like
+    /// [`try_reserve_layout_exact`](ContiguousMemory::try_reserve_layout_exact),
+    /// tries growing the underlying memory to ensure container has a free
+    /// segment that can store a value with provided `layout`, but panics if
+    /// that's not possible instead of returning an error value.
     ///
-    /// If the base address changed due to reallocation, new [`BasePtr`] is
-    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
-    /// result is `Ok(None)`.
-    ///
-    /// After calling this function, new capacity will be equal to:
-    /// `self.size() + padding + size_of::<V>()`.
+    /// See the [base implementation](ContiguousMemory::try_reserve_layout) for
+    /// more details.
     ///
     /// # Panics
     ///
@@ -763,15 +800,12 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// Tries growing the underlying memory to ensure container has a free
     /// segment that can store a value with provided `layout`.
     ///
-    /// If the base address changed due to reallocation, new [`BasePtr`] is
-    /// returned as `Ok(Some(BasePtr))`, if base address stayed the same the
-    /// result is `Ok(None)`.
+    /// Unlike [`try_reserve_layout`](ContiguousMemory::try_reserve_layout),
+    /// this function will only reserve memory necessary to accommodate the
+    /// provided layout and not more.
     ///
-    /// If the new capacity exceeds `isize::MAX` or the allocator couldn't
-    /// allocate required memory, a [`MemoryError`] is returned.
-    ///
-    /// After calling this function, new capacity will be equal to: `self.size()
-    /// + padding + layout.size()`.
+    /// See [base implementation](ContiguousMemory::try_reserve_layout) for
+    /// more details.
     pub fn try_reserve_layout_exact(
         &mut self,
         layout: impl HasLayout,
@@ -783,12 +817,39 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         self.ensure_free_section::<true>(layout.size(), Some(layout.align()))
     }
 
-    /// Shrinks the capacity with a lower bound and returns the base pointer.
+    /// Tries shrinking the capacity of the container to provided
+    /// `new_capacity`, or smallest larger one if provided `new_capacity` can't
+    /// accomodate stored data, and returns the [`MemoryBase`].
+    /// 
+    /// `MemoryBase` result will generally stay the same for shrinking
+    /// operations, but that depends on the used [allocator `A`](ManageMemory).
     ///
     /// # Panics
     ///
     /// Panics if the allocator wasn't able to shrink the allocated memory
-    /// region.
+    /// region. This should almost never happen unless the allocator doesn't
+    /// support deallocation.
+    ///
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::ContiguousMemory;
+    /// let mut s: ContiguousMemory = ContiguousMemory::with_capacity(32);
+    /// assert_eq!(s.capacity(), 32);
+    /// 
+    /// let r = s.push(1u16);
+    ///
+    /// // can't grow capacity
+    /// s.shrink_to(64);
+    /// assert_eq!(s.capacity(), 32);
+    /// 
+    /// // can shrink capacity to more than is currently used
+    /// s.shrink_to(8);
+    /// assert_eq!(s.capacity(), 8);
+    ///
+    /// // but it won't shrink it past the minimum required 
+    /// s.shrink_to(0);
+    /// assert_eq!(s.capacity(), 2);
+    /// ```
     pub fn shrink_to(&mut self, new_capacity: usize) -> MemoryBase {
         let mut tracker = WritableInner::write(&self.inner.tracker).unwrap();
         let new_capacity = tracker.shrink(new_capacity);
@@ -804,7 +865,29 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     }
 
     /// Shrinks the capacity to fit the currently stored data and returns the
-    /// base pointer.
+    /// new [`MemoryBase`].
+    /// 
+    /// Bytes between stored objects will remain allocated to reduce
+    /// fragmentation.
+    /// 
+    /// # Panics
+    ///
+    /// Panics if the allocator wasn't able to shrink the allocated memory
+    /// region. This should almost never happen unless the allocator doesn't
+    /// support deallocation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use contiguous_mem::ContiguousMemory;
+    /// let mut s: ContiguousMemory = ContiguousMemory::with_capacity(1024);
+    ///
+    /// assert_eq!(s.capacity(), 1024);
+    /// let r = s.push(1u16);
+    ///
+    /// s.shrink_to_fit();
+    /// assert_eq!(s.capacity(), 2);
+    /// ```
     pub fn shrink_to_fit(&mut self) -> MemoryBase {
         let mut base = WritableInner::write(&self.inner.base).unwrap();
         let new_capacity = match WritableInner::write(&self.inner.tracker)
@@ -826,10 +909,40 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// Value type argument `T` is used to infer type size and returned
     /// reference dropping behavior.
     ///
+    /// Use [`push_persisted`](ContiguousMemory::push_persisted) if you want to
+    /// push data that shouldn't be cleared once the reference is dropped.
+    ///
+    /// Use [`push_raw`](ContiguousMemory::push_raw) if you want to take full
+    /// control over details of push the pushed type (memory location and
+    /// `Layout` ).
+    ///
+    /// There's also a [`push_raw_persisted`](ContiguousMemory::push_persisted)
+    /// variant that combines functionality of both.
+    /// 
     /// # Panics
     ///
-    /// Panics if the collection needs to grow and new capacity exceeds
-    /// `isize::MAX` bytes or allocation of additional memory fails.
+    /// Panics if:
+    /// - the collection needs to grow and new capacity exceeds `isize::MAX`
+    ///   bytes, or
+    /// - allocation of additional memory fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use contiguous_mem::ContiguousMemory;
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
+    ///
+    /// let r1 = s.push(1u16);
+    /// let mut r2 = s.push(2u32);
+    /// let r3 = s.push("hello");
+    ///
+    /// println!("{} world", *r3.get());
+    /// assert_eq!(*r1.get() as u32 + *r2.get(), 3u32);
+    ///
+    /// let r1 = s.push(3u32);
+    /// r2 = s.push(4u32);
+    /// assert_eq!(*r1.get() + *r2.get(), 7u32);
+    /// ```
     pub fn push<T>(&mut self, value: T) -> Impl::PushResult<T> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
@@ -1026,7 +1139,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
             .release(region);
     }
 
-    /// Forgets this container without dropping it and returns its base address
+    /// Forgets this container without dropping it, returning its base address
     /// and [`Layout`].
     ///
     /// # Safety
@@ -1039,9 +1152,8 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// guaranteed to be safe.
     ///
     /// This method isn't unsafe as leaking data doesn't cause undefined
-    /// behavior. ([_see
-    /// details_](https://doc.rust-lang.org/nomicon/leaking.html))
-    pub fn forget(self) -> MemoryBase {
+    /// behavior. ([_why_](https://doc.rust-lang.org/nomicon/leaking.html))
+    pub fn leak(self) -> MemoryBase {
         let base = self.base();
         core::mem::forget(self);
         base

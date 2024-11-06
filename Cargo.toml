@@ -2,7 +2,7 @@
 name = "contiguous-mem"
 version = "0.5.0"
 edition = "2021"
-description = "A contiguous memory storage"
+description = "A contiguous memory container"
 authors = ["Tin Švagelj <tin.svagelj@live.com>"]
 license = "MIT OR Apache-2.0 OR Zlib"
 keywords = ["memory", "contiguous", "storage", "container", "nostd"]
@@ -42,7 +42,7 @@ allocator_api = []
 sptr = "0.3.2"
 
 [dev-dependencies]
-byteorder = "1.4"
+byteorder = "1.5"
 
 [package.metadata.docs.rs]
 all-features = true

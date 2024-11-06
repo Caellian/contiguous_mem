@@ -20,5 +20,5 @@ fn main() {
 
     // All stored data gets cleaned up once `memory` goes out of scope, or we
     // can forget it existed:
-    // memory.forget();
+    // memory.leak();
 }

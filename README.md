@@ -1,41 +1,32 @@
 # contiguous_mem
 
-contiguous_mem is a vector like collection that can store entries with
-heterogeneous layouts while retaining type information at the reference level.
+contiguous_mem is space optimized a vector like collection that can store
+entries of **varying layouts** **close in memory** while retaining type
+information at the reference level.
 
 [![Crate](https://img.shields.io/crates/v/contiguous_mem?style=for-the-badge&logo=docs.rs)](https://crates.io/crates/contiguous_mem)
 [![Documentation](https://img.shields.io/docsrs/contiguous-mem?style=for-the-badge&logo=rust)](https://docs.rs/contiguous-mem)
 [![CI Status](https://img.shields.io/github/actions/workflow/status/Caellian/contiguous_mem/rust.yml?style=for-the-badge&logo=githubactions&logoColor=%23fff&label=CI)](https://github.com/Caellian/contiguous_mem/actions/workflows/rust.yml)
 [![Zlib or MIT or Apache 2.0 license](https://img.shields.io/crates/l/contiguous-mem?style=for-the-badge)](https://github.com/Caellian/contiguous_mem#license)
 
-## Key Features
+## Use Case
+
+![quick preview showing layout advantage](./doc/layout.png)<br/>
+<sup>* Both <code>Vec</code> and <code>ContiguousMemory</code> have <em>one</em>
+level of indirection that's not shown for sake of simplicity.</sup>
+
+You need to store several different types and ensure their close proximity on
+the heap to reduce cache misses, but which/how many is determined at runtime.
+
+### Key Features
 
 - `no_std` support!
-- Simple and straightforward interface similar to standard containers.
-- Support for dynamic resizing of allocated memory keeping the created
+- Interface similar to `Vec`.
+- Support for dynamic resizing of allocated memory while keeping the existing
   references functional (for safe implementations).
-
-### Specialized implementations
-
-This crate provides alternative implementations for:
-
-- thread-safe code: `SyncContiguousMemory`
-- low level, unsafe code: `UnsafeContiguousMemory`
-
-Default implementation (`ContiguousMemory`) and `SyncContiguousMemory` return
-smart references with relative offsets of stored data, while the
-`UnsafeContiguousMemory` returns raw pointers.
-
-All implementations use a similar interface which makes it convenient to switch
-over when your scope and requirements shift.
-
-## Use cases
-
-- Storing differently typed/sized data. ([example](./examples/default_impl.rs))
-- Ensuring stored data is placed adjacently in memory.
-  ([example](./examples/game_loading.rs))
-  - Note that returned references are **not** contiguous, only data they refer
-    to is.
+- Exhaustively tested with Miri.
+- No downstream dependencies.
+  - ...almost, only [sptr](https://crates.io/crates/sptr) is used to ensure safety.
 
 ## Getting Started
 
@@ -64,8 +55,6 @@ contiguous_mem = { version = "0.5", features = ["no_std"] }
   environment
 - [`allocator_api`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/allocator-api.html)
   &lt;_nightly_&gt; - enables automatic support for custom allocators
-- `sync_impl` (default) - enables `SyncContiguousMemory` and related error code
-  implementation
 - `unsafe_impl` (default) - enables `UnsafeContiguousMemory`
 
 ### Usage
@@ -92,33 +81,29 @@ fn main() {
     assert_eq!(*stored_number.get(), 22);
 }
 ```
+<sub>* Note that reference types returned by store are inferred and only shown
+here for demonstration purposes.</sub>
 
-- References have a similar API as
-  [`RefCell`](https://doc.rust-lang.org/stable/std/cell/struct.RefCell.html)
-
-<cite>Note that reference types returned by store are inferred and only shown
-here for demonstration purposes.</cite>
+References have a similar API as [`RefCell`](https://doc.rust-lang.org/stable/std/cell/struct.RefCell.html).
 
 For more usage examples see the
-[`examples`](https://github.com/Caellian/contiguous_mem/tree/trunk/examples)
+[examples](https://github.com/Caellian/contiguous_mem/tree/trunk/examples)
 directory.
 
 ## Stability
 
-All versions prior to 1.0.0 are not considered production ready. This is my
-first crate and there's still a lot of edge cases I didn't get a chance to
-consider yet.
+This crate has almost complete test coverage and is tested with Miri. It doesn't
+rely on any weird language quirks, but it _does_ deal with memory management.
 
-Prelimenary tests are in place but I don't consider them sufficient to guarantee
-full correctness of behavior. I am however using this crate for development of
-another crate which allows me to do some integration testing besides just
-examples.
+There's a lot of unsafe code due to the nature of the crate, but again, it's
+covered by tests and Miri.
 
 ## Alternatives
 
 - manually managing memory to ensure contiguous placement of data
   - prone to errors and requires unsafe code
-- for storing types with uniform `Layout`, when you only need to erase their
+- multiple levels of indirection (`Vec<Box<dyn Trait>>`)
+- for storing types with **uniform** `Layout`, when you only need to erase their
   types at the container level see:
   - [`any_vec`](https://crates.io/crates/any_vec)
   - [`type_erased_vec`](https://crates.io/crates/type_erased_vec)
@@ -144,4 +129,5 @@ license unless you explicitly state otherwise.
 ## License
 
 This project is licensed under [Zlib](./LICENSE_ZLIB), [MIT](./LICENSE_MIT), or
-[Apache-2.0](./LICENSE_APACHE) license, choose whichever suits you most.
+[Apache-2.0](./LICENSE_APACHE) license, choose whichever suits your use case the
+best.

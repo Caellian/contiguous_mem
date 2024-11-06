@@ -6,7 +6,7 @@ mod std_imports {
 }
 
 #[cfg(not(feature = "no_std"))]
-pub use std_imports::*;
+pub(crate) use std_imports::*;
 
 #[cfg(feature = "no_std")]
 mod nostd_imports {
@@ -16,7 +16,7 @@ mod nostd_imports {
     pub use ::alloc::vec::Vec;
 }
 #[cfg(feature = "no_std")]
-pub use nostd_imports::*;
+pub(crate) use nostd_imports::*;
 
 #[cfg(feature = "error_in_core")]
 pub use core::error::Error;
@@ -202,11 +202,8 @@ impl<T: ?Sized> WritableInner<T> for UnsafeCell<T> {
     }
 }
 
-/// A fake [`Reference`]-like wrapper for [unsafe implementation](ImplUnsafe)
-/// state and [`Cell`](core::cell::Cell).
-/// 
-/// As an owned value `T` doesn't implement a [`Deref`], this wrapper fills that
-/// gap in order to unify implementation details.
+/// A wrapper to allow using owned values in [unsafe implementation](ImplUnsafe)
+/// state and [cells](core::cell::Cell) via [`Deref`].
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Owned<T>(pub(crate) T);
@@ -377,11 +374,7 @@ where
 
 pub(crate) type DropFn = fn(*mut ());
 pub(crate) const fn drop_fn<T>() -> fn(*mut ()) {
-    if core::mem::needs_drop::<T>() {
-        |ptr: *mut ()| unsafe { core::ptr::drop_in_place(ptr as *mut T) }
-    } else {
-        |_: *mut ()| {}
-    }
+    |ptr: *mut ()| unsafe { core::ptr::drop_in_place(ptr as *mut T) }
 }
 
 pub(crate) const fn is_layout_valid(size: usize, align: usize) -> bool {
@@ -396,12 +389,13 @@ pub(crate) const fn is_layout_valid(size: usize, align: usize) -> bool {
 /// Sized` as an argument to a function which requires a type layout.
 ///
 /// This trait is sealed to prevent users from implementing it for arbitrary
-/// types which would voilate its intention and cause bloat.
+/// types which could voilate its purpose.
 pub trait HasLayout: Sealed {
-    /// Returns a layout of the reference or a copy of the layout directly.
+    /// Returns a layout of the reference or a copy of the layout.
     fn as_layout(&self) -> Layout;
 }
 
+/// Base implementation, allowing direct use of `Layout`.
 impl HasLayout for Layout {
     #[inline]
     fn as_layout(&self) -> Layout {
@@ -409,6 +403,7 @@ impl HasLayout for Layout {
     }
 }
 
+/// Layout can be inferred from any reference to a [`Sized`] type.
 impl<T> HasLayout for &T {
     #[inline]
     fn as_layout(&self) -> Layout {

@@ -77,9 +77,6 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> Drop for MemoryState<Impl, A> {
 /// Unlike a fat pointer, this struct also stores information on expected
 /// alignment the slice was allocated with, unifying [`Layout`] and pointer
 /// types.
-///
-/// It contains _any_ information required for allocation and deallocation, the
-/// exact details and layout of that data is an internal implementation detail.
 #[cfg_attr(feature = "debug", derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MemoryBase {

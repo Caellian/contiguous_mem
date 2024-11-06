@@ -71,21 +71,88 @@ impl SegmentTracker {
     }
 
     /// Returns the total memory size being tracked.
+    ///
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::memory::SegmentTracker;
+    /// let mut tracker = SegmentTracker::new(1024);
+    ///
+    /// assert_eq!(tracker.size(), 1024);
+    ///
+    /// tracker.grow(2048);
+    ///
+    /// assert_eq!(tracker.size(), 2048);
+    /// ```
     pub fn size(&self) -> usize {
         self.size
     }
 
     /// Returns the sum of unoccupied bytes of all unused memory segments.
+    ///
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::memory::SegmentTracker;
+    /// # use contiguous_mem::range::ByteRange;
+    /// # use core::alloc::Layout;
+    /// let mut tracker = SegmentTracker::new(1024);
+    ///
+    /// assert_eq!(tracker.count_free(), 1024);
+    ///
+    /// let layout = Layout::from_size_align(512, 8).unwrap();
+    /// let _ = tracker.take_next(4, layout).unwrap();
+    ///
+    /// // both preceding 8 bytes and subsequent 504 bytes are counted towards
+    /// // the total:
+    /// assert_eq!(tracker.count_free(), 512);
+    /// ```
     pub fn count_free(&self) -> usize {
         self.unoccupied.iter().fold(0, |acc, it| acc + it.len())
     }
 
     /// Returns `true` if there is no empty space left in the tracked region.
+    ///
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::memory::SegmentTracker;
+    /// # use contiguous_mem::range::ByteRange;
+    /// # use core::alloc::Layout;
+    /// let mut tracker = SegmentTracker::new(1024);
+    ///
+    /// let layout = Layout::from_size_align(512, 8).unwrap();
+    /// let _ = tracker.take_next(4, layout).unwrap();
+    ///
+    /// assert!(!tracker.is_full());
+    ///
+    /// let layout = Layout::from_size_align(504, 8).unwrap();
+    /// let _ = tracker.take_next(4, layout).unwrap();
+    ///
+    /// assert!(!tracker.is_full());
+    ///
+    /// let layout = Layout::from_size_align(8, 4).unwrap();
+    /// let _ = tracker.take_next(4, layout).unwrap();
+    ///
+    /// assert!(tracker.is_full());
+    /// ```
     pub fn is_full(&self) -> bool {
         self.unoccupied.is_empty()
     }
 
     /// Returns a [`ByteRange`] encompassing the entire tracked memory region.
+    ///
+    /// # Examples
+    /// ```
+    /// # use contiguous_mem::memory::SegmentTracker;
+    /// # use contiguous_mem::range::ByteRange;
+    /// # use core::alloc::Layout;
+    /// let mut tracker = SegmentTracker::new(1024);
+    ///
+    /// assert_eq!(tracker.whole_range(), ByteRange(0, 1024));
+    ///
+    /// let layout = Layout::from_size_align(512, 8).unwrap();
+    /// let _ = tracker.take_next(4, layout).unwrap();
+    ///
+    /// assert_eq!(tracker.whole_range(), ByteRange(0, 1024));
+    /// ```
     pub fn whole_range(&self) -> ByteRange {
         ByteRange(0, self.size)
     }
@@ -93,7 +160,7 @@ impl SegmentTracker {
     /// Grows the available memory range represented by this structure to
     /// provided `new_size` and returns the new size.
     pub fn grow(&mut self, new_size: usize) -> usize {
-        if new_size < self.size {
+        if new_size <= self.size {
             return self.size;
         }
 
@@ -114,6 +181,10 @@ impl SegmentTracker {
     /// Tries shrinking the available memory range represented by this structure
     /// to provided `new_size` and returns the new size.
     pub fn shrink(&mut self, new_size: usize) -> usize {
+        if new_size >= self.size {
+            return self.size;
+        }
+        
         let last = match self.unoccupied.last_mut() {
             Some(it) => it,
             None => return self.size,
@@ -157,7 +228,7 @@ impl SegmentTracker {
             return false;
         }
 
-        self.unoccupied.iter().enumerate().any(|(_, it)| {
+        self.unoccupied.iter().any(|it| {
             it.offset(base.pos_or_align()) // absolute range
                 .aligned(layout.align()) // aligned to value
                 .len()
@@ -307,8 +378,9 @@ impl SegmentTracker {
         }
     }
 
+    /// Clears all regions marked as occupied.
     #[inline]
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.unoccupied.clear();
         self.unoccupied.push(self.whole_range())
     }

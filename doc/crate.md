@@ -1,5 +1,6 @@
-contiguous_mem is a vector like collection that can store entries with
-heterogeneous layouts while retaining type information at the reference level.
+contiguous_mem is space optimized a vector like collection that can store
+entries of varying layouts close in memory while retaining type information at
+the reference level.
 
 ## Features
 
@@ -12,8 +13,6 @@ heterogeneous layouts while retaining type information at the reference level.
   environment
 - [`allocator_api`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/allocator-api.html)
   &lt;_nightly_&gt; - enables automatic support for custom allocators
-- `sync_impl` (default) - enables `SyncContiguousMemory` and related error code
-  implementation
 - `unsafe_impl` (default) - enables `UnsafeContiguousMemory`
 
 ## Contributions
