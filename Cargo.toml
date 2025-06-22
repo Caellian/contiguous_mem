@@ -25,10 +25,10 @@ path = "examples/unsafe_impl.rs"
 required-features = ["unsafe_impl"]
 
 [features]
-default = ["unsafe_impl", "debug"]
+default = ["std", "unsafe_impl", "debug"]
 
-no_std = [] # No-std support
-debug = []  # Enable debug attributes
+std = []
+debug = []
 
 # Implementations
 unsafe_impl = []
@@ -36,9 +36,9 @@ unsafe_impl = []
 # Nightly features
 ptr_metadata = []
 error_in_core = []
-allocator_api = []
 
 [dependencies]
+allocator-api2 = "0.3.0"
 sptr = "0.3.2"
 
 [dev-dependencies]

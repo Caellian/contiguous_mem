@@ -372,8 +372,8 @@ pub enum BorrowState {
 
 /// Size requirements for types pointed to by references
 ///
-/// This is a sealed marker trait that allows `ptr_metadata` to control whether
-/// Reference
+/// This is a sealed marker trait that allows `ptr_metadata` feature to disable
+/// [`Sized`] requirement for [`EntryRef`] types.
 #[cfg(feature = "ptr_metadata")]
 pub trait RefSizeReq: Sealed {}
 #[cfg(feature = "ptr_metadata")]

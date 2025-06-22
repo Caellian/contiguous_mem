@@ -7,7 +7,7 @@ use core::{
 
 use crate::{
     error::MemoryError,
-    memory::{DefaultMemoryManager, ManageMemory, SegmentTracker},
+    memory::{ManageMemory, SegmentTracker, System},
 };
 
 use super::*;
@@ -26,9 +26,9 @@ pub struct MemoryState<Impl: ImplDetails<A>, A: ManageMemory> {
     pub alloc: A,
 }
 
-impl<Impl: ImplDetails<DefaultMemoryManager>> MemoryState<Impl, DefaultMemoryManager> {
+impl<Impl: ImplDetails<System>> MemoryState<Impl, System> {
     pub fn new(layout: Layout) -> Result<Self, MemoryError> {
-        let alloc = DefaultMemoryManager;
+        let alloc = System;
         let ptr = alloc.allocate(layout)?;
         Ok(MemoryState {
             base: Impl::Base::from(MemoryBase {

@@ -1,21 +1,21 @@
 //! Module re-exporting used types and polyfill to help with feature support.
 
-#[cfg(not(feature = "no_std"))]
+#[cfg(feature = "std")]
 mod std_imports {
     pub use std::rc::Rc;
 }
 
-#[cfg(not(feature = "no_std"))]
+#[cfg(feature = "std")]
 pub(crate) use std_imports::*;
 
-#[cfg(feature = "no_std")]
+#[cfg(not(feature = "std"))]
 mod nostd_imports {
     pub use ::alloc::rc::Rc;
 
     pub use ::alloc::vec;
     pub use ::alloc::vec::Vec;
 }
-#[cfg(feature = "no_std")]
+#[cfg(not(feature = "std"))]
 pub(crate) use nostd_imports::*;
 
 #[cfg(feature = "error_in_core")]
@@ -25,7 +25,7 @@ use core::{
     convert::Infallible, alloc::Layout, ops::{Deref, DerefMut},
     fmt::Debug,
 };
-#[cfg(all(not(feature = "error_in_core"), not(feature = "no_std")))]
+#[cfg(all(not(feature = "error_in_core"), feature = "std"))]
 pub use std::error::Error;
 
 use crate::{reference::{state::ReferenceState, BorrowState, EntryRef}, memory::{ManageMemory, SegmentTracker}, raw::MemoryBase, ConstructReference};
@@ -50,11 +50,11 @@ pub trait ReadableInner<T: ?Sized> {
     
     /// Error returned when calling [`read`](ReadableInner::read) or
     /// [`try_read`](ReadableInner::try_read) fails.
-    #[cfg(not(any(feature = "error_in_core", not(feature = "no_std"))))]
+    #[cfg(not(any(feature = "error_in_core", feature = "std")))]
     type BorrowError: Debug;
     /// Error returned when calling [`read`](ReadableInner::read) or
     /// [`try_read`](ReadableInner::try_read) fails.
-    #[cfg(any(feature = "error_in_core", not(feature = "no_std")))]
+    #[cfg(any(feature = "error_in_core", feature = "std"))]
     type BorrowError: Error;
 
     /// Returns the [read guard](ReadableInner::ReadGuard) for `T` if the
@@ -89,11 +89,11 @@ pub trait WritableInner<T: ?Sized>: ReadableInner<T> {
 
     /// Error returned when calling [`write`](WritableInner::write) or
     /// [`try_write`](WritableInner::try_write) fails.
-    #[cfg(not(any(feature = "error_in_core", not(feature = "no_std"))))]
+    #[cfg(not(any(feature = "error_in_core", feature = "std")))]
     type MutBorrowError: Debug;
     /// Error returned when calling [`write`](WritableInner::write) or
     /// [`try_write`](WritableInner::try_write) fails.
-    #[cfg(any(feature = "error_in_core", not(feature = "no_std")))]
+    #[cfg(any(feature = "error_in_core", feature = "std"))]
     type MutBorrowError: Error;
 
     /// Returns the [write guard](WritableInner::WriteGuard) for `T` if the

@@ -1,22 +1,24 @@
 //! Structs and code for memory management.
 
-use core::cmp;
+use core::{cmp, fmt::Write};
 use core::{alloc::Layout, ptr::NonNull};
 
 pub use crate::raw::{BaseAddress, BasePtr, MemoryBase};
 use crate::types::HasLayout;
 
-#[cfg(feature = "no_std")]
+#[cfg(not(feature = "std"))]
 use crate::types::{vec, Vec};
 use crate::{range::ByteRange, MemoryError};
 
-#[cfg(feature = "no_std")]
-pub use alloc::alloc;
-#[cfg(not(feature = "no_std"))]
-use std::alloc;
+#[cfg(nightly)]
+use core::alloc::Allocator;
+#[cfg(not(nightly))]
+use allocator_api2::alloc::Allocator;
 
-#[cfg(feature = "allocator_api")]
-use alloc::Allocator;
+#[cfg(nightly)]
+pub use std::alloc::System;
+#[cfg(not(nightly))]
+pub use allocator_api2::alloc::System;
 
 /// A structure that keeps track of unoccupied regions of memory.
 ///
@@ -417,8 +419,8 @@ impl<'a> Location<'a> {
         Location {
             parent,
             index: 0,
-            whole: ByteRange(0, 0),
-            usable: ByteRange(0, 0),
+            whole: ByteRange::EMPTY,
+            usable: ByteRange::EMPTY,
         }
     }
 
@@ -500,10 +502,8 @@ impl<'a> Location<'a> {
 /// implementations of the trait must ensure to return `None` as [`BaseAddress`]
 /// appropriately in those cases.
 ///
-/// Default implementation is [`DefaultMemoryManager`].
-///
-/// If `allocator_api` feature is enabled, this trait is implemented for all
-/// [allocators](alloc::Allocator).
+/// Default implementation that uses a system allocator (`malloc`) is
+/// [`alloc::System`](System). Other allocators are supported as well.
 pub trait ManageMemory {
     /// Allocates a block of memory with size and alignment specified by
     /// `layout` argument.
@@ -534,82 +534,6 @@ pub trait ManageMemory {
     unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError>;
 }
 
-unsafe fn some_non_null_slice(data: *mut u8, len: usize) -> Option<NonNull<[u8]>> {
-    Some(NonNull::from(core::slice::from_raw_parts_mut(data, len)))
-}
-
-/// Default [memory manager](ManageMemory) that uses the methods exposed by
-/// [`alloc`] module.
-#[derive(Clone, Copy)]
-pub struct DefaultMemoryManager;
-impl ManageMemory for DefaultMemoryManager {
-    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
-        Ok(if layout.size() == 0 {
-            None
-        } else {
-            unsafe {
-                let data = alloc::alloc(layout);
-                if data.is_null() {
-                    return Err(MemoryError::TooLarge);
-                }
-                some_non_null_slice(data, layout.size())
-            }
-        })
-    }
-
-    unsafe fn deallocate(&self, base: MemoryBase) {
-        if let MemoryBase {
-            address: Some(it), ..
-        } = base
-        {
-            alloc::dealloc(it.as_ptr() as *mut u8, base.layout());
-        }
-    }
-
-    unsafe fn shrink(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
-        Ok(match base.address {
-            Some(it) => {
-                if new_size > 0 {
-                    let data = alloc::realloc(it.as_ptr() as *mut u8, base.layout(), new_size);
-                    if data.is_null() {
-                        return Err(MemoryError::TooLarge);
-                    }
-                    some_non_null_slice(data, new_size)
-                } else {
-                    alloc::dealloc(it.as_ptr() as *mut u8, base.layout());
-                    None
-                }
-            }
-            None => None,
-        })
-    }
-
-    unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
-        Ok(match base.address {
-            Some(it) => {
-                let data = alloc::realloc(it.as_ptr() as *mut u8, base.layout(), new_size);
-                if data.is_null() {
-                    return Err(MemoryError::TooLarge);
-                }
-                some_non_null_slice(data, new_size)
-            }
-            None => {
-                if new_size == 0 {
-                    None
-                } else {
-                    let new_layout = Layout::from_size_align(new_size, base.alignment())?;
-                    let data = alloc::alloc(new_layout);
-                    if data.is_null() {
-                        return Err(MemoryError::TooLarge);
-                    }
-                    some_non_null_slice(data, new_size)
-                }
-            }
-        })
-    }
-}
-
-#[cfg(feature = "allocator_api")]
 impl<A: Allocator> ManageMemory for A {
     fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
         if layout.size() == 0 {
@@ -686,24 +610,63 @@ impl<A: Allocator> ManageMemory for A {
     }
 }
 
-#[cfg(not(feature = "allocator_api"))]
-impl<D: core::ops::Deref> ManageMemory for D
-where
-    D::Target: ManageMemory,
-{
-    fn allocate(&self, layout: Layout) -> Result<BaseAddress, MemoryError> {
-        self.deref().allocate(layout)
-    }
-
-    unsafe fn deallocate(&self, base: MemoryBase) {
-        self.deref().deallocate(base)
-    }
-
-    unsafe fn shrink(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
-        self.deref().shrink(base, new_size)
-    }
-
-    unsafe fn grow(&self, base: MemoryBase, new_size: usize) -> Result<BaseAddress, MemoryError> {
-        self.deref().grow(base, new_size)
+/// Provides a very verbose [`Display`][core::fmt::Display] of
+/// [`SegmentTracker`] with address information.
+#[cfg(feature = "debug")]
+pub struct DisplaySegments(pub(crate) usize, pub(crate) SegmentTracker);
+#[cfg(feature = "debug")]
+impl core::fmt::Display for DisplaySegments {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        writeln!(f, "v- start: 0x{:X}", self.0)?;
+        let mut len = 2;
+        f.write_char('|')?;
+        let mut location = self.0;
+        for &u in &self.1.unoccupied {
+            if u.0 != location - self.0 {
+                let occupied = u.0 + self.0 - location;
+                let used = format!("#..{}B..#", occupied);
+                if used.len() < occupied {
+                    f.write_str(&used)?;
+                    len += used.len();
+                } else {
+                    f.write_str(&"#".repeat(occupied))?;
+                    len += occupied;
+                }
+            }
+            let space = (u.1.saturating_sub(u.0)).max(1);
+            let start = format!("[0x{:X}", u.0 + self.0);
+            let end = format!("0x{:X}]", u.1 + self.0);
+            let total = format!("|{}B|", space);
+            if start.len() + total.len() + end.len() >= space {
+                write!(f, "{}{}{}", start, total, end)?;
+                len += start.len() + total.len() + end.len();
+            } else {
+                write!(f, "{}|{}", start, end)?;
+                len += start.len() + 1 + end.len();
+            }
+            location = self.0 + u.1;
+        }
+        if location != self.0 + self.1.size {
+            let occupied = self.0 + self.1.size - location;
+            let used = format!("#..{}B..#", occupied);
+            if used.len() < occupied {
+                f.write_str(&used)?;
+                len += used.len();
+            } else {
+                f.write_str(&"#".repeat(occupied))?;
+                len += occupied;
+            }
+        }
+        f.write_char('|')?;
+        writeln!(f, " total: {}B", self.1.size)?;
+        let end = format!("end: 0x{:X} -^", self.0 + self.1.size);
+        if end.len() > len {
+            let end = format!("^- end: 0x{:X}", self.0 + self.1.size);
+            write!(f, "{}{}", " ".repeat(len - 1), end)?;
+        } else {
+            write!(f, "{}{}", " ".repeat(len - end.len()), end)?;
+        }
+        
+        Ok(())
     }
 }

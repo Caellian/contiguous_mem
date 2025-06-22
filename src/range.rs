@@ -8,7 +8,12 @@ use sptr::Strict;
 use crate::raw::BaseAddress;
 
 /// Represents a range of bytes.
+/// 
+/// This type is very semantically similar to [`Range`][core::ops::Range], but
+/// it's not an iterator so it implements [`Copy`], and has some additional
+/// functionality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct ByteRange(
     /// **Inclusive** lower bound of this byte range.
     pub usize,
@@ -33,12 +38,23 @@ impl ByteRange {
     }
 
     /// Aligns the start of this byte range to the provided `alignment`.
+    /// 
+    /// If the aligned start is past the range end, then end moved to the new
+    /// `start` value to keep the bounds ordered, i.e. avoid negative range
+    /// lengths.
     pub fn aligned(&self, alignment: usize) -> Self {
         let modulo = self.0 % alignment;
         if modulo == 0 {
             return *self;
         }
-        ByteRange(self.0 + alignment - modulo, self.1)
+        
+        let aligned_start = self.0 + alignment - modulo;
+        if aligned_start > self.1 {
+            // alignment shrunk the range past its length
+            return ByteRange(aligned_start, aligned_start)
+        }
+
+        ByteRange(aligned_start, self.1)
     }
 
     /// Aligns the start of this byte range to the provided `alignment`.
@@ -81,7 +97,8 @@ impl ByteRange {
     /// Returns length of this byte range.
     #[inline]
     pub fn len(&self) -> usize {
-        self.1 - self.0
+        debug_assert!(self.1 >= self.0, "negative byte range length");
+        self.1.saturating_sub(self.0)
     }
 
     /// Returns `true` if this byte range is zero-sized.
@@ -142,6 +159,17 @@ impl ByteRange {
     #[inline]
     pub(crate) unsafe fn offset_base_unwrap<T>(&self, addr: BaseAddress) -> *mut T {
         (addr.unwrap_unchecked().as_ptr() as *mut u8).map_addr(|addr| addr + self.0) as *mut T
+    }
+}
+
+impl From<core::ops::Range<usize>> for ByteRange {
+    fn from(value: core::ops::Range<usize>) -> Self {
+        Self(value.start, value.end)
+    }
+}
+impl From<ByteRange> for core::ops::Range<usize> {
+    fn from(value: ByteRange) -> Self {
+        value.0..value.1
     }
 }
 

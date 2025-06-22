@@ -25,8 +25,13 @@ the heap to reduce cache misses, but which/how many is determined at runtime.
 - Support for dynamic resizing of allocated memory while keeping the existing
   references functional (for safe implementations).
 - Exhaustively tested with Miri.
-- No downstream dependencies.
-  - ...almost, only [sptr](https://crates.io/crates/sptr) is used to ensure safety.
+- Limited downstream dependencies (only polyfills).
+  - [sptr](https://crates.io/crates/sptr) is used as polyfill for
+    [Strict Provenance](https://doc.rust-lang.org/beta/unstable-book/language-features/strict-provenance.html)
+    and required for MIRI.
+  - [allocator-api2](https://crates.io/crates/allocator-api2)
+    is used as polyfill for the
+    [allocator API](https://doc.rust-lang.org/unstable-book/library-features/allocator-api.html).
 
 ## Getting Started
 
@@ -37,11 +42,11 @@ Add the crate to your dependencies:
 contiguous_mem = { version = "0.5" }
 ```
 
-Optionally enable `no_std` feature to use in `no_std` environment:
+Disable default features (`std` feature) for use in `no_std` environments:
 
 ```toml
 [dependencies]
-contiguous_mem = { version = "0.5", features = ["no_std"] }
+contiguous_mem = { version = "0.5", default-feature = false, features = ["unsafe_impl"] }
 ```
 
 ### Features
@@ -53,8 +58,6 @@ contiguous_mem = { version = "0.5", features = ["no_std"] }
 - [`error_in_core`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/error-in-core.html)
   &lt;_nightly_&gt; - enables support for `core::error::Error` in `no_std`
   environment
-- [`allocator_api`](https://dev-doc.rust-lang.org/stable/unstable-book/library-features/allocator-api.html)
-  &lt;_nightly_&gt; - enables automatic support for custom allocators
 - `unsafe_impl` (default) - enables `UnsafeContiguousMemory`
 
 ### Usage
@@ -84,7 +87,8 @@ fn main() {
 <sub>* Note that reference types returned by store are inferred and only shown
 here for demonstration purposes.</sub>
 
-References have a similar API as [`RefCell`](https://doc.rust-lang.org/stable/std/cell/struct.RefCell.html).
+Returned references have semantics similar to
+[`RefCell`](https://doc.rust-lang.org/stable/std/cell/struct.RefCell.html).
 
 For more usage examples see the
 [examples](https://github.com/Caellian/contiguous_mem/tree/trunk/examples)

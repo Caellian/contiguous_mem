@@ -18,21 +18,16 @@ jobs:
         unsafe_impl: [true, false]
         ptr_metadata: [true, false]
         error_in_core: [true, false]
-        allocator_api: [true, false]
         exclude:
           - rust: stable
             ptr_metadata: true
           - rust: stable
             error_in_core: true
-          - rust: stable
-            allocator_api: true
           # no point in testing nightly with unstable features disabled
           - rust: nightly
             ptr_metadata: false
           - rust: nightly
             error_in_core: false
-          - rust: nightly
-            allocator_api: false
     runs-on: ${{ matrix.os }}
     name: |
       test - ${{ matrix.os }}; ${{ matrix.rust }} rust; features: {
@@ -40,8 +35,7 @@ jobs:
         debug: ${{ matrix.debug }},
         unsafe_impl: ${{ matrix.unsafe_impl }},
         ptr_metadata: ${{ matrix.ptr_metadata }},
-        error_in_core: ${{ matrix.error_in_core }},
-        allocator_api: ${{ matrix.allocator_api }}
+        error_in_core: ${{ matrix.error_in_core }}
       }
     env:
       RUST_BACKTRACE: 1 # Emit backtraces on panics.
@@ -62,8 +56,6 @@ jobs:
         run: echo "FEATURES=$FEATURES,ptr_metadata" >> $GITHUB_ENV
       - if: matrix.error_in_core == true
         run: echo "FEATURES=$FEATURES,error_in_core" >> $GITHUB_ENV
-      - if: matrix.allocator_api == true
-        run: echo "FEATURES=$FEATURES,allocator_api" >> $GITHUB_ENV
       - run: cargo test --no-default-features --features=${{ env.FEATURES }} --verbose
 
   lint:

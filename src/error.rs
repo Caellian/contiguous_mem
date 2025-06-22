@@ -1,13 +1,18 @@
 //! Errors produced by the crate.
 
-#[cfg(any(feature = "error_in_core", not(feature = "no_std")))]
+#[cfg(any(feature = "error_in_core", feature = "std"))]
 use crate::types::Error;
 
 use core::fmt::Debug;
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+#[cfg(any(feature = "std", feature = "error_in_core"))]
 use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use crate::{range::ByteRange, reference::BorrowState};
+
+#[cfg(nightly)]
+use core::alloc::AllocError;
+#[cfg(not(nightly))]
+use allocator_api2::alloc::AllocError;
 
 /// Represents a class of errors returned by invalid memory operations and
 /// allocator failure.
@@ -20,9 +25,7 @@ pub enum MemoryError {
     /// arguments being provided to an allocator.
     Allocator(
         /// Cause allocator error.
-        #[cfg(feature = "allocator_api")]
-        core::alloc::AllocError,
-        #[cfg(not(feature = "allocator_api"))] (),
+        AllocError,
     ),
 }
 
@@ -32,7 +35,7 @@ impl From<core::alloc::LayoutError> for MemoryError {
     }
 }
 
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+#[cfg(any(feature = "std", feature = "error_in_core"))]
 impl Display for MemoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -45,20 +48,18 @@ impl Display for MemoryError {
     }
 }
 
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+#[cfg(any(feature = "std", feature = "error_in_core"))]
 impl Error for MemoryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            #[cfg(feature = "allocator_api")]
             MemoryError::Allocator(inner) => Some(inner),
             _ => None,
         }
     }
 }
 
-#[cfg(feature = "allocator_api")]
-impl From<core::alloc::AllocError> for MemoryError {
-    fn from(err: core::alloc::AllocError) -> Self {
+impl From<AllocError> for MemoryError {
+    fn from(err: AllocError) -> Self {
         MemoryError::Allocator(err)
     }
 }
@@ -72,7 +73,7 @@ pub struct RegionBorrowError {
     /// State of the borrow before failiure.
     pub borrow_state: BorrowState,
 }
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+#[cfg(any(feature = "std", feature = "error_in_core"))]
 impl Display for RegionBorrowError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self.borrow_state {
@@ -90,5 +91,5 @@ impl Display for RegionBorrowError {
     }
 }
 
-#[cfg(any(not(feature = "no_std"), feature = "error_in_core"))]
+#[cfg(any(feature = "std", feature = "error_in_core"))]
 impl Error for RegionBorrowError {}

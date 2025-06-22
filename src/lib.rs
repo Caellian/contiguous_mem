@@ -1,16 +1,20 @@
 #![allow(incomplete_features)]
 #![allow(unstable_name_collisions)]
-#![cfg_attr(feature = "no_std", no_std)]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(feature = "ptr_metadata", feature(ptr_metadata, unsize))]
 #![cfg_attr(feature = "error_in_core", feature(error_in_core))]
-#![cfg_attr(feature = "allocator_api", feature(allocator_api))]
+#![cfg_attr(nightly, feature(allocator_api))]
 #![cfg_attr(all(doc, nightly), feature(doc_auto_cfg))]
-#![cfg_attr(nightly, feature(strict_provenance))]
+#![cfg_attr(nightly, feature(strict_provenance, strict_provenance_lints))]
 #![cfg_attr(nightly, warn(fuzzy_provenance_casts))]
 #![warn(missing_docs)]
-#![doc = include_str!("../doc/crate.md")]
 
-#[cfg(feature = "no_std")]
+//!contiguous_mem is space optimized a vector like collection that can store
+//!entries of varying layouts close in memory while retaining type information
+//!at the reference level.
+#![doc = include_str!("../doc/features.md")]
+
+#[cfg(not(feature = "std"))]
 extern crate alloc;
 
 pub mod error;
@@ -31,7 +35,7 @@ use core::{
     mem::{size_of, ManuallyDrop},
 };
 
-use memory::{DefaultMemoryManager, ManageMemory};
+use memory::{ManageMemory, System};
 use range::ByteRange;
 use raw::*;
 use types::*;
@@ -56,12 +60,12 @@ use types::*;
 #[cfg_attr(feature = "unsafe_impl", doc = "```")]
 pub struct ContiguousMemory<
     Impl: ImplDetails<A> = ImplDefault,
-    A: ManageMemory = DefaultMemoryManager,
+    A: ManageMemory = System,
 > {
     inner: Impl::StateRef<MemoryState<Impl, A>>,
 }
 
-impl<Impl: ImplDetails<DefaultMemoryManager>> ContiguousMemory<Impl> {
+impl<Impl: ImplDetails<System>> ContiguousMemory<Impl> {
     /// Creates a new, empty `ContiguousMemory` instance aligned with alignment
     /// of `usize`.
     ///
@@ -152,11 +156,9 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// # #![allow(unused_mut)]
     /// # use core::mem::align_of;
     /// use contiguous_mem::ContiguousMemory;
-    /// use contiguous_mem::memory::DefaultMemoryManager;
+    /// use contiguous_mem::memory::System;
     ///
-    /// let mut storage: ContiguousMemory = ContiguousMemory::with_alloc(
-    ///     DefaultMemoryManager
-    /// );
+    /// let mut storage: ContiguousMemory = ContiguousMemory::with_alloc(System);
     /// # assert_eq!(storage.capacity(), 0);
     /// # assert_eq!(storage.align(), align_of::<usize>());
     /// ```
@@ -182,11 +184,11 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// # #![allow(unused_mut)]
     /// # use core::mem::align_of;
     /// use contiguous_mem::ContiguousMemory;
-    /// use contiguous_mem::memory::DefaultMemoryManager;
+    /// use contiguous_mem::memory::System;
     ///
     /// let mut storage: ContiguousMemory = ContiguousMemory::with_capacity_and_alloc(
     ///     256,
-    ///     DefaultMemoryManager
+    ///     System
     /// );
     /// # assert_eq!(storage.capacity(), 256);
     /// # assert_eq!(storage.align(), align_of::<usize>());
@@ -219,11 +221,11 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// use core::mem::align_of;
     /// use core::alloc::Layout;
     /// use contiguous_mem::ContiguousMemory;
-    /// use contiguous_mem::memory::DefaultMemoryManager;
+    /// use contiguous_mem::memory::System;
     ///
     /// let mut storage: ContiguousMemory = ContiguousMemory::with_layout_and_alloc(
     ///     Layout::from_size_align(0, align_of::<u32>()).unwrap(),
-    ///     DefaultMemoryManager
+    ///     System
     /// );
     /// # assert_eq!(storage.capacity(), 0);
     /// # assert_eq!(storage.align(), align_of::<u32>());
@@ -559,7 +561,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
             additional = core::cmp::max(capacity, additional);
         }
 
-        self.try_grow_to(capacity + additional)
+        self.try_grow_to(capacity.saturating_add(additional))
     }
 
     /// Like [`try_reserve`](ContiguousMemory::try_reserve), grows the
@@ -996,7 +998,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// returned reference:
     /// ```
     /// # use contiguous_mem::*;
-    /// # use contiguous_mem::memory::DefaultMemoryManager;
+    /// # use contiguous_mem::memory::System;
     /// # use core::alloc::Layout;
     /// # use core::mem;
     /// # let mut storage: ContiguousMemory = ContiguousMemory::new();
@@ -1005,7 +1007,7 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// let layout = Layout::new::<Vec<&str>>();
     ///
     /// // Reference type arguments must be fully specified.
-    /// let stored: EntryRef<Vec<&str>, DefaultMemoryManager> = unsafe {
+    /// let stored: EntryRef<Vec<&str>, System> = unsafe {
     ///     mem::transmute(storage.push_raw(erased, layout))
     /// };
     /// ```
@@ -1158,6 +1160,13 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
         core::mem::forget(self);
         base
     }
+
+    /// Provides a very verbose [segment display][memory::DisplaySegments].
+    #[cfg(feature = "debug")]
+    pub fn display_layout(&self) -> memory::DisplaySegments {
+        let tracker = ReadableInner::read(&self.inner.tracker).unwrap();
+        memory::DisplaySegments(self.base().as_pos(), tracker.clone())
+    }
 }
 
 #[cfg(feature = "debug")]
@@ -1187,21 +1196,17 @@ where
     }
 }
 
-impl<Impl: ImplDetails<DefaultMemoryManager>> Default for ContiguousMemory<Impl> {
-    fn default() -> Self {
-        ContiguousMemory::new()
-    }
-}
-
 impl<Impl: ImplDetails<A>, A: ManageMemory + Default> Default for ContiguousMemory<Impl, A> {
     fn default() -> Self {
         ContiguousMemory::with_alloc(A::default())
     }
 }
 
-#[cfg(all(test, not(feature = "no_std")))]
+#[cfg(test)]
 mod test {
     use super::*;
+
+    extern crate std;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[repr(C)]

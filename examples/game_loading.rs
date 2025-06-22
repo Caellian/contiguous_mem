@@ -34,8 +34,7 @@ impl<T> IndexOrPtr<T> {
 pub trait Load {
     /// # Safety
     /// 
-    /// Loading is unsafe, that's why the game is so fun - you don't know
-    /// whether you'll be able to continue playing if you ever stop.
+    /// Loading is unsafe for performance reasons.
     unsafe fn load<R: Read>(data: R) -> Self;
 }
 pub trait Save {
@@ -108,7 +107,91 @@ impl Save for Level {
     }
 }
 
-// this function emulates FS access for this example, ignore it
+fn main() {
+    let mut data = ContiguousMemory::<ImplUnsafe>::with_layout(
+        Layout::from_size_align(112, align_of::<Level>()).unwrap(),
+    );
+
+    // Create enemy lookup list.
+    let enemies: &[*const Enemy] = &[
+        data.push(load_game_file("enemy1.dat")),
+        data.push(load_game_file("enemy2.dat")),
+        data.push(load_game_file("enemy3.dat")),
+        data.push(load_game_file("enemy4.dat")),
+    ];
+
+    // Create level lookup list.
+    let levels: &[*mut Level] = &[
+        data.push(load_game_file("level1.dat")),
+        data.push(load_game_file("level2.dat")),
+    ];
+
+    // Data won't go out of scope while we're using it in this example, but if
+    // it were loaded in some other function it would.
+    data.leak();
+    // Now we can assume all created pointers are 'static.
+
+    // Prepare levels for use
+    levels.iter().for_each(|level| {
+        let level = unsafe { &mut **level };
+
+        level.enemies = level
+            .enemies
+            .iter()
+            .map(|enemy| enemy.to_ref(enemies))
+            .collect();
+    });
+
+    let mut time = 0.0;
+    let mut current_level: usize = 0;
+
+    // Main game loop
+    while current_level < levels.len() {
+        // Simulate the passage of time (you can replace this with your game logic)
+        time += 1.0;
+
+        let mut all_enemies_killed = true;
+        let current_lvl = unsafe { &mut *levels[current_level] };
+
+        for enemy in current_lvl.enemies.iter_mut() {
+            let enemy_ref = enemy.unwrap_ref();
+
+            let health_reduction = ((5.0 + time * 0.25) as u32).min(enemy_ref.health);
+            enemy_ref.health -= health_reduction;
+            enemy_ref.age += 1.0;
+
+            // Check if the enemy is still alive
+            if enemy_ref.health > 0 {
+                all_enemies_killed = false;
+            }
+        }
+
+        // If all enemies in the current level are killed, reset them and progress to the next level
+        if all_enemies_killed {
+            println!(
+                "All enemies in level {} have been killed!",
+                current_level + 1
+            );
+            current_level += 1;
+
+            // Reset all enemies in the next level
+            if current_level < levels.len() {
+                let next_level = unsafe { &mut *levels[current_level] };
+                for enemy in next_level.enemies.iter_mut() {
+                    enemy.unwrap_ref().reset();
+                }
+            }
+        }
+    }
+
+    println!(
+        "Congratulations! You've completed all levels in: {:.2}",
+        time
+    );
+}
+
+/// This function emulates filesystem access and deserialization for this
+/// example, you can ignore it.
 fn load_game_file<T: Load>(file_name: &'static str) -> T {
     let mut data = Vec::with_capacity(24);
     let mut data_cursor = Cursor::new(&mut data);
@@ -173,87 +256,4 @@ fn load_game_file<T: Load>(file_name: &'static str) -> T {
     data_cursor.set_position(0);
 
     unsafe { T::load(data_cursor) }
-}
-
-fn main() {
-    let mut data = ContiguousMemory::<ImplUnsafe>::with_layout(
-        Layout::from_size_align(112, align_of::<Level>()).unwrap(),
-    );
-
-    // Create enemy lookup list.
-    let enemies: &[*const Enemy] = &[
-        data.push(load_game_file("enemy1.dat")),
-        data.push(load_game_file("enemy2.dat")),
-        data.push(load_game_file("enemy3.dat")),
-        data.push(load_game_file("enemy4.dat")),
-    ];
-
-    // Create level lookup list.
-    let levels: &[*mut Level] = &[
-        data.push(load_game_file("level1.dat")),
-        data.push(load_game_file("level2.dat")),
-    ];
-
-    // data won't go out of scope while we're using it in this example, but in
-    // your use case it might. This is here for completeness.
-    data.leak();
-    // now we can assume all created pointers are 'static
-
-    // prepare levels for use
-    levels.iter().for_each(|level| {
-        let level = unsafe { &mut **level };
-
-        level.enemies = level
-            .enemies
-            .iter()
-            .map(|enemy| enemy.to_ref(enemies))
-            .collect();
-    });
-
-    let mut time = 0.0;
-    let mut current_level: usize = 0;
-
-    // Main game loop
-    while current_level < levels.len() {
-        // Simulate the passage of time (you can replace this with your game logic)
-        time += 1.0;
-
-        let mut all_enemies_killed = true;
-        let current_lvl = unsafe { &mut *levels[current_level] };
-
-        for enemy in current_lvl.enemies.iter_mut() {
-            let enemy_ref = enemy.unwrap_ref();
-
-            let health_reduction = ((5.0 + time * 0.25) as u32).min(enemy_ref.health);
-            enemy_ref.health -= health_reduction;
-            enemy_ref.age += 1.0;
-
-            // Check if the enemy is still alive
-            if enemy_ref.health > 0 {
-                all_enemies_killed = false;
-            }
-        }
-
-        // If all enemies in the current level are killed, reset them and progress to the next level
-        if all_enemies_killed {
-            println!(
-                "All enemies in level {} have been killed!",
-                current_level + 1
-            );
-            current_level += 1;
-
-            // Reset all enemies in the next level
-            if current_level < levels.len() {
-                let next_level = unsafe { &mut *levels[current_level] };
-                for enemy in next_level.enemies.iter_mut() {
-                    enemy.unwrap_ref().reset();
-                }
-            }
-        }
-    }
-
-    println!(
-        "Congratulations! You've completed all levels in: {:.2}",
-        time
-    );
 }
