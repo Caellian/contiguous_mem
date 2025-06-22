@@ -1,11 +1,19 @@
-#![doc(hidden)]
+//! Contains [`ByteRange`] and related code.
 
 use core::fmt::Display;
 
-/// Represents a range of bytes in
-/// [`AllocationTracker`](crate::tracker::AllocationTracker) and
-/// [`ContiguousMemoryStorage`](crate::ContiguousMemoryStorage).
+#[cfg(not(nightly))]
+use sptr::Strict;
+
+use crate::raw::BaseAddress;
+
+/// Represents a range of bytes.
+/// 
+/// This type is very semantically similar to [`Range`][core::ops::Range], but
+/// it's not an iterator so it implements [`Copy`], and has some additional
+/// functionality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct ByteRange(
     /// **Inclusive** lower bound of this byte range.
     pub usize,
@@ -13,7 +21,11 @@ pub struct ByteRange(
     pub usize,
 );
 
+#[allow(unused)]
 impl ByteRange {
+    /// An empty byte range.
+    pub const EMPTY: ByteRange = ByteRange(0, 0);
+
     /// Constructs a new byte range, ensuring that `from` and `to` are ordered
     /// correctly.
     pub fn new(from: usize, to: usize) -> Self {
@@ -25,8 +37,28 @@ impl ByteRange {
         ByteRange(from, to)
     }
 
-    /// Aligns this byte range to the provided `alignment`.
+    /// Aligns the start of this byte range to the provided `alignment`.
+    /// 
+    /// If the aligned start is past the range end, then end moved to the new
+    /// `start` value to keep the bounds ordered, i.e. avoid negative range
+    /// lengths.
     pub fn aligned(&self, alignment: usize) -> Self {
+        let modulo = self.0 % alignment;
+        if modulo == 0 {
+            return *self;
+        }
+        
+        let aligned_start = self.0 + alignment - modulo;
+        if aligned_start > self.1 {
+            // alignment shrunk the range past its length
+            return ByteRange(aligned_start, aligned_start)
+        }
+
+        ByteRange(aligned_start, self.1)
+    }
+
+    /// Aligns the start of this byte range to the provided `alignment`.
+    pub fn offset_aligned(&self, alignment: usize) -> Self {
         let modulo = self.0 % alignment;
         if modulo == 0 {
             return *self;
@@ -35,6 +67,7 @@ impl ByteRange {
     }
 
     /// Caps the end address of this byte range to the provided `position`.
+    #[inline]
     pub fn cap_end(&self, position: usize) -> Self {
         ByteRange(self.0, position.min(self.1))
     }
@@ -48,6 +81,7 @@ impl ByteRange {
     }
 
     /// Offsets this byte range by a provided unsigned `offset`.
+    #[inline]
     pub fn offset(&self, offset: usize) -> Self {
         ByteRange(self.0 + offset, self.1 + offset)
     }
@@ -61,91 +95,86 @@ impl ByteRange {
     }
 
     /// Returns length of this byte range.
+    #[inline]
     pub fn len(&self) -> usize {
-        self.1 - self.0
+        debug_assert!(self.1 >= self.0, "negative byte range length");
+        self.1.saturating_sub(self.0)
     }
 
-    /// Returns true if this byte range is zero-sized.
+    /// Returns `true` if this byte range is zero-sized.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.0 == self.1
     }
 
-    /// Returns `true` if this byte range contains another byte range `other`.
+    /// Returns `true` if this byte range contains `other` byte range.
+    #[inline]
     pub fn contains(&self, other: Self) -> bool {
         self.0 <= other.0 && other.1 <= self.1
     }
 
-    /// Returns two byte ranges that remain when another `other` range is
-    /// removed from this one.
-    ///
-    /// It is possible for either or both of the returned byte ranges to have a
-    /// length of 0 if `other` is aligned with either the upper or lower bound
-    /// of this range, or if it is equal to this range.
-    pub fn difference_unchecked(&self, other: Self) -> (Self, Self) {
-        (ByteRange(self.0, other.0), ByteRange(other.1, self.1))
+    /// Returns `true` if `other` byte range overlaps this byte range.
+    #[inline]
+    pub fn overlaps(&self, other: Self) -> bool {
+        self.contains(other)
+            || (other.0 <= self.0 && other.1 > self.0)
+            || (other.0 < self.1 && other.1 > self.1)
     }
 
     /// Merges this byte range with `other` and returns a byte range that
     /// contains both.
-    pub fn merge_unchecked(&self, other: Self) -> Self {
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use contiguous_mem::range::ByteRange;
+    /// let a = ByteRange::new_unchecked(0, 10);
+    /// let b = ByteRange::new_unchecked(10, 20);
+    ///
+    /// let added_seq = a.union_unchecked(b);
+    /// assert_eq!(added_seq.0, 0);
+    /// assert_eq!(added_seq.1, 20);
+    ///
+    /// // range union is symmetrical
+    /// let added_seq_rev = b.union_unchecked(a);
+    /// assert_eq!(added_seq_rev.0, 0);
+    /// assert_eq!(added_seq_rev.1, 20);
+    /// ```
+    pub fn union_unchecked(&self, other: Self) -> Self {
         ByteRange(self.0.min(other.0), self.1.max(other.1))
     }
 
-    /// Merges another `other` byte range into this one, resulting in a byte
-    /// range that contains both.
-    pub fn merge_in_unchecked(&mut self, other: Self) {
+    /// Merges `other` byte range into this one, resulting in a byte range that
+    /// contains both.
+    pub fn apply_union_unchecked(&mut self, other: Self) {
         self.0 = self.0.min(other.0);
         self.1 = self.1.max(other.1);
+    }
+
+    #[inline]
+    pub(crate) fn offset_base<T>(&self, addr: BaseAddress) -> Option<*mut T> {
+        addr.map(|it| (it.as_ptr() as *const u8).map_addr(|addr| addr + self.0) as *mut T)
+    }
+
+    #[inline]
+    pub(crate) unsafe fn offset_base_unwrap<T>(&self, addr: BaseAddress) -> *mut T {
+        (addr.unwrap().as_ptr() as *mut u8).map_addr(|addr| addr + self.0) as *mut T
+    }
+}
+
+impl From<core::ops::Range<usize>> for ByteRange {
+    fn from(value: core::ops::Range<usize>) -> Self {
+        Self(value.start, value.end)
+    }
+}
+impl From<ByteRange> for core::ops::Range<usize> {
+    fn from(value: ByteRange) -> Self {
+        value.0..value.1
     }
 }
 
 impl Display for ByteRange {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "[{:x}, {:x})", self.0, self.1)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn byterange_merging_works() {
-        let a = ByteRange::new_unchecked(0, 10);
-        let b = ByteRange::new_unchecked(10, 20);
-
-        let added_seq = a.merge_unchecked(b);
-        assert_eq!(added_seq.0, 0);
-        assert_eq!(added_seq.1, 20);
-
-        let added_seq_rev = b.merge_unchecked(a);
-        assert_eq!(added_seq_rev.0, 0);
-        assert_eq!(added_seq_rev.1, 20);
-    }
-
-    #[test]
-    fn byterange_difference_works() {
-        let larger = ByteRange::new_unchecked(0, 500);
-
-        let left_aligned = ByteRange::new_unchecked(0, 10);
-        let test_left = larger.difference_unchecked(left_aligned);
-        assert_eq!(test_left.0 .0, 0);
-        assert_eq!(test_left.0 .1, 0);
-        assert_eq!(test_left.1 .0, 10);
-        assert_eq!(test_left.1 .1, 500);
-
-        let contained = ByteRange::new_unchecked(300, 400);
-        let test_contained = larger.difference_unchecked(contained);
-        assert_eq!(test_contained.0 .0, 0);
-        assert_eq!(test_contained.0 .1, 300);
-        assert_eq!(test_contained.1 .0, 400);
-        assert_eq!(test_contained.1 .1, 500);
-
-        let right_aligned = ByteRange::new_unchecked(450, 500);
-        let test_right = larger.difference_unchecked(right_aligned);
-        assert_eq!(test_right.0 .0, 0);
-        assert_eq!(test_right.0 .1, 450);
-        assert_eq!(test_right.1 .0, 500);
-        assert_eq!(test_right.1 .1, 500);
     }
 }

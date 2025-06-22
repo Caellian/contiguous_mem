@@ -1,8 +1,8 @@
 [package]
 name = "contiguous-mem"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
-description = "A contiguous memory storage"
+description = "A contiguous memory container"
 authors = ["Tin Švagelj <tin.svagelj@live.com>"]
 license = "MIT OR Apache-2.0 OR Zlib"
 keywords = ["memory", "contiguous", "storage", "container", "nostd"]
@@ -10,23 +10,39 @@ categories = ["data-structures", "memory-management", "no-std"]
 repository = "https://github.com/Caellian/contiguous_mem"
 
 [[example]]
+name = "game_loading"
+path = "examples/game_loading.rs"
+required-features = ["unsafe_impl"]
+
+[[example]]
 name = "ptr_metadata"
 path = "examples/ptr_metadata.rs"
 required-features = ["ptr_metadata"]
 
-[dependencies]
-portable-atomic = { version = "1", default-features = false, optional = true }
-spin = { version = "0.9", optional = true }
+[[example]]
+name = "unsafe_impl"
+path = "examples/unsafe_impl.rs"
+required-features = ["unsafe_impl"]
 
 [features]
-default = []
-no_std = ["dep:portable-atomic", "dep:spin"]
+default = ["std", "unsafe_impl", "debug"]
+
+std = []
 debug = []
+
+# Implementations
+unsafe_impl = []
+
+# Nightly features
 ptr_metadata = []
 error_in_core = []
 
+[dependencies]
+allocator-api2 = "0.3.0"
+sptr = "0.3.2"
+
 [dev-dependencies]
-byteorder = "1.4"
+byteorder = "1.5"
 
 [package.metadata.docs.rs]
 all-features = true
