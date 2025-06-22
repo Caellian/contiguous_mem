@@ -2,8 +2,9 @@
 
 #set page(
   margin: 1cm,
-  width: 600pt,
-  height: 210pt,
+  width: auto,
+  height: auto,
+  fill: none,
 )
 #set text(size: 15pt, font: "Ubuntu")
 
@@ -69,15 +70,20 @@
   rounded(color.hsl(64deg, 100%, 79.41%), width: byte-size * 2, "D"),
 )
 
-#stack(
-  dir: ttb,
-  vec-layout,
-  v(10pt),
-  align(horizon, stack(dir: ltr, spacing: 1pt,
-    cmem-layout, raw(lang: "rust", ".push(E)"), $ arrow.filled $, h(5pt), cmem-layout-after
-  )),
-  v(5pt),
-  move(dx: 100pt, text(size: 10pt)[
-    #table(align: center, stroke: none, inset: 0pt, $arrow.filled.t$, v(5pt), [_alignment_], v(2pt), [_padding_])
-  ])
+#box(
+  fill: white,
+  outset: 1cm,
+  radius: 1cm,
+  stack(
+    dir: ttb,
+    vec-layout,
+    v(10pt),
+    align(horizon, stack(dir: ltr, spacing: 1pt,
+      cmem-layout, raw(lang: "rust", ".push(E)"), $ arrow.filled $, h(5pt), cmem-layout-after
+    )),
+    v(5pt),
+    move(dx: 100pt, text(size: 10pt)[
+      #table(align: center, stroke: none, inset: 0pt, $arrow.filled.t$, v(5pt), [_alignment_], v(2pt), [_padding_])
+    ])
+  )
 )
