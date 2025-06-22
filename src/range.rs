@@ -158,7 +158,7 @@ impl ByteRange {
 
     #[inline]
     pub(crate) unsafe fn offset_base_unwrap<T>(&self, addr: BaseAddress) -> *mut T {
-        (addr.unwrap_unchecked().as_ptr() as *mut u8).map_addr(|addr| addr + self.0) as *mut T
+        (addr.unwrap().as_ptr() as *mut u8).map_addr(|addr| addr + self.0) as *mut T
     }
 }
 

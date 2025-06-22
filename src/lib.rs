@@ -956,6 +956,12 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// Stores a `value` of type `T` in the contiguous memory block and returns
     /// a reference to it which doesn't mark the memory segment as free when
     /// dropped.
+    /// 
+    /// This is semantically similar to:
+    /// ```
+    /// # let value = "I will be static".to_string();
+    /// let leaked = Box::leak(Box::new(value));
+    /// ```
     ///
     /// See [`ContiguousMemory::push`] for details.
     ///
@@ -963,6 +969,38 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     ///
     /// Panics if the collection needs to grow and new capacity exceeds
     /// `isize::MAX` bytes or allocation of additional memory fails.
+    /// 
+    /// # Examples
+    ///
+    /// ```
+    /// # use contiguous_mem::ContiguousMemory;
+    /// # use core::sync::atomic::AtomicBool;
+    /// # use core::sync::atomic::Ordering;
+    /// let mut s: ContiguousMemory = ContiguousMemory::new();
+    /// 
+    /// static DROPPED: AtomicBool = AtomicBool::new(false);
+    /// 
+    /// struct SideEffect;
+    /// impl Drop for SideEffect {
+    ///     fn drop(&mut self) {
+    ///         unsafe {
+    ///             DROPPED.store(true, Ordering::SeqCst);
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// let r1 = s.push_persisted(SideEffect); // leaked on insertion
+    /// assert_eq!(DROPPED.load(Ordering::SeqCst), false);
+    /// 
+    /// // value will stay allocated even after last reference is dropped:
+    /// std::mem::drop(r1);
+    /// assert_eq!(DROPPED.load(Ordering::SeqCst), false);
+    /// 
+    /// // normal use will trigger `DROPPED`:
+    /// let normal = SideEffect;
+    /// std::mem::drop(normal);
+    /// assert_eq!(DROPPED.load(Ordering::SeqCst), true);
+    /// ```
     pub fn push_persisted<T>(&mut self, value: T) -> Impl::PushResult<T> {
         let mut data = ManuallyDrop::new(value);
         let layout = Layout::for_value(&data);
@@ -1013,6 +1051,10 @@ impl<Impl: ImplDetails<A>, A: ManageMemory> ContiguousMemory<Impl, A> {
     /// ```
     pub unsafe fn push_raw<T>(&mut self, data: *const T, layout: Layout) -> Impl::PushResult<T> {
         let range = loop {
+            if layout.size() == 0 {
+                break ByteRange::EMPTY;
+            }
+
             let base = self.base();
             let next = WritableInner::write(&self.inner.tracker)
                 .unwrap()
